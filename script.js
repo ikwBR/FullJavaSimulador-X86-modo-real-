@@ -1,14 +1,15 @@
 
+// script.js (VERSÃO FINAL: CÁLCULO DETALHADO E.F = CS*10 + IP)
+
 // --- CONFIGURAÇÃO ---
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
 
 // --- ESTADO DA MÁQUINA ---
-// Estes são os valores iniciais apenas para a primeira carga
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
-    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, // CS alterado para 4000
-    IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, // IP alterado para AE00
+    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, // Padrão Professor
+    IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010,
     FLAGS: 0x0002,
     memory: {}, 
     instructions: [],
@@ -100,7 +101,7 @@ const SimulatorCore = {
         return [base, 0xC0];
     },
 
-    // --- FETCH ---
+    // --- FETCH (ATUALIZADO: CÁLCULO DETALHADO) ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS;
@@ -145,7 +146,22 @@ const SimulatorCore = {
         }
 
         const newIP = (ip + size) & 0xFFFF;
-        machineState.calcLog = `Modo: ${machineState.busWidth}-bits\nCS:IP = ${this.padHex(cs)}:${this.padHex(ip)}H\nNovo IP: ${this.padHex(newIP)}H`;
+        
+        // --- GERA O TEXTO DO CÁLCULO MATEMÁTICO ---
+        const csHex = this.padHex(cs);
+        const ipHex = this.padHex(ip);
+        const physHex = this.padHex(this.physAddr(cs, ip), 5);
+
+        machineState.calcLog = 
+            `----------------------------------\n` +
+            `CÁLCULO DO ENDEREÇO DE BUSCA (CS:IP)\n` +
+            `----------------------------------\n` +
+            `Fórmula: E.F. = (CS * 10H) + IP\n` +
+            `Passo 1: E.F. = (${csHex}H * 10H) + ${ipHex}H\n` +
+            `Passo 2: E.F. = ${csHex}0H + ${ipHex}H\n` +
+            `Resultado: E.F. = ${physHex}H\n` +
+            `\nNovo IP após busca: ${this.padHex(newIP)}H`;
+        
         machineState.IP = newIP;
         return log;
     },
@@ -159,7 +175,7 @@ const SimulatorCore = {
         return "Byte";
     },
 
-    // --- EXECUTE ---
+    // --- EXECUTE (ATUALIZADO: CÁLCULO DE DADOS) ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
@@ -186,6 +202,21 @@ const SimulatorCore = {
             }
             this.writeMem(phys, low, "Escrita Low");
             this.writeMem(phys+1, high, "Escrita High");
+
+            // --- CÁLCULO DE ENDEREÇO DE DADOS ---
+            const dsHex = this.padHex(ds);
+            const offHex = this.padHex(off);
+            const physDataHex = this.padHex(phys, 5);
+
+            machineState.calcLog += 
+                `\n\n----------------------------------\n` +
+                `CÁLCULO DO ENDEREÇO DE DADOS (DS:OFFSET)\n` +
+                `----------------------------------\n` +
+                `Fórmula: E.F. = (DS * 10H) + Offset\n` +
+                `Passo 1: E.F. = (${dsHex}H * 10H) + ${offHex}H\n` +
+                `Passo 2: E.F. = ${dsHex}0H + ${offHex}H\n` +
+                `Resultado: E.F. = ${physDataHex}H\n` +
+                `Dado Escrito: ${this.padHex(valSrc, 4)}H`;
         } 
         else if (machineState[dest] !== undefined) {
             machineState[dest] = valSrc;
@@ -274,18 +305,13 @@ async function simulateExecution(action) {
         if(loadCode()) updateUI();
         return;
     }
-    // --- AQUI ESTÁ A ALTERAÇÃO PRINCIPAL ---
     if (action === 'reset') {
         stopAutoRun();
         const select = document.getElementById('bus-mode');
         const currentMode = select ? parseInt(select.value, 10) : 8;
-        
         machineState = {
-            AX: 0, BX: 0, CX: 0, DX: 0, 
-            CS: 0x4000, // <--- DEFINIDO PARA 4000H
-            SS: 0x2000, DS: 0x3000, ES: 0x4000,
-            IP: 0xAE00, // <--- DEFINIDO PARA AE00H
-            SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
+            AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
+            IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
             memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
             logs: "", calcLog: "", busWidth: currentMode
         };
@@ -294,7 +320,6 @@ async function simulateExecution(action) {
         updateUI();
         return;
     }
-    
     if (machineState.instructions.length === 0 || machineState.currentInstructionIndex >= machineState.instructions.length) {
         stopAutoRun(); return;
     }
@@ -315,7 +340,7 @@ async function simulateExecution(action) {
     const flux = document.getElementById('fluxo-output');
     flux.textContent += `\n\n[${padHexUI(machineState.currentInstructionIndex)}] ${line}\n${machineState.logs}`;
     flux.scrollTop = flux.scrollHeight;
-    document.getElementById('address-calculation-output').textContent = machineState.calcLog;
+    document.getElementById('address-calculation-output').innerText = machineState.calcLog;
     
     machineState.currentInstructionIndex++;
     if (machineState.currentInstructionIndex >= machineState.instructions.length) stopAutoRun();
@@ -343,5 +368,3 @@ function changeBusMode() {
 }
 
 document.addEventListener('DOMContentLoaded', updateUI);
-
-
