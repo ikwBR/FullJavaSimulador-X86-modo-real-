@@ -1,14 +1,11 @@
 
-// script.js (VERSÃO FINAL: CÁLCULO DETALHADO E.F = CS*10 + IP)
-
-// --- CONFIGURAÇÃO ---
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
 
-// --- ESTADO DA MÁQUINA ---
+// --- ESTADO ---
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
-    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, // Padrão Professor
+    CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
     IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010,
     FLAGS: 0x0002,
     memory: {}, 
@@ -16,12 +13,12 @@ let machineState = {
     currentInstructionIndex: 0,
     busStep: 1,
     logs: "",     
-    calcLog: "",
+    calcHistory: [], // <--- NOVO: Array para guardar histórico
     busWidth: 8 
 };
 
 // ============================================================================
-//  CORE DO SIMULADOR
+//  CORE
 // ============================================================================
 
 const SimulatorCore = {
@@ -63,12 +60,22 @@ const SimulatorCore = {
         return data ? data.val : 0;
     },
 
-    // --- MONTADOR ---
+    // --- HELPER PARA HISTÓRICO ---
+    addHistory: function(type, seg, off, phys) {
+        // Adiciona ao topo da lista (ou fim, depende da preferencia visual)
+        machineState.calcHistory.push({
+            type: type,
+            segOff: `${this.padHex(seg)}:${this.padHex(off)}`,
+            calc: `${this.padHex(seg)}0 + ${this.padHex(off)}`,
+            res: `${this.padHex(phys, 5)}`
+        });
+    },
+
+    // --- ASSEMBLE ---
     assemble: function(op, dest, src, currentIP) {
         op = op.toUpperCase();
         const regs = ['AX','BX','CX','DX','SI','DI','BP','SP','CS','DS','SS','ES'];
 
-        // 1. MOV MEM, IMM (6 Bytes)
         if (op === 'MOV' && dest.startsWith('[') && src !== "") {
             if (!regs.includes(src)) {
                 const d = this.hexToInt(dest);
@@ -76,32 +83,27 @@ const SimulatorCore = {
                 return [0xC7, 0x06, d & 0xFF, d >> 8, s & 0xFF, s >> 8];
             }
         }
-        // 2. MOV AX, IMM (3 Bytes)
         if (op === 'MOV' && dest === 'AX') {
             if (!regs.includes(src) && src !== "") {
                 const val = this.hexToInt(src);
                 return [0xB8, val & 0xFF, val >> 8];
             }
         }
-        // 3. ADD BX, AX (2 Bytes)
         if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xD8];
-        // 4. MOV [SI], AX (2 Bytes)
         if (op === 'MOV' && dest === '[SI]' && src === 'AX') return [0x89, 0x04];
-        // 5. JMP (3 Bytes)
         if (op === 'JMP') {
             const target = this.hexToInt(dest);
             const nextIP = (currentIP + 3) & 0xFFFF;
             let offset = (target - nextIP) & 0xFFFF;
             return [0xE9, offset & 0xFF, offset >> 8];
         }
-        // Fallbacks
         const mapOp = {'MOV':0x89, 'ADD':0x01, 'SUB':0x29, 'CMP':0x39, 'AND':0x21, 'OR':0x09, 'XOR':0x31, 'PUSH':0x50, 'POP':0x58};
         const base = mapOp[op] || 0x90;
         if (['INC', 'DEC', 'PUSH', 'POP'].includes(op)) return [base];
         return [base, 0xC0];
     },
 
-    // --- FETCH (ATUALIZADO: CÁLCULO DETALHADO) ---
+    // --- FETCH ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS;
@@ -109,8 +111,11 @@ const SimulatorCore = {
         const bytes = this.assemble(op, dest, src, ip);
         const size = bytes.length;
 
+        // Grava no Histórico
+        const physStart = this.physAddr(cs, ip);
+        this.addHistory("Busca (CS:IP)", cs, ip, physStart);
+
         if (machineState.busWidth === 16) {
-            // MODO 16 BITS
             for (let i = 0; i < size; i += 2) {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 const addrHex = this.padHex(phys, 5);
@@ -128,41 +133,20 @@ const SimulatorCore = {
                 } else {
                     dataBusStr = this.padHex(low, 2);
                 }
-
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${addrHex} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MEM para MP): ${dataBusStr}H (BUS DADOS)\n`;
             }
         } else {
-            // MODO 8 BITS
             bytes.forEach((byteVal, i) => {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 const desc = this.getDesc(op, size, i);
-                
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MEM para MP): ${this.padHex(byteVal, 2)}H (BUS DADOS)\n`;
-                
                 this.writeMem(phys, byteVal, desc);
             });
         }
 
-        const newIP = (ip + size) & 0xFFFF;
-        
-        // --- GERA O TEXTO DO CÁLCULO MATEMÁTICO ---
-        const csHex = this.padHex(cs);
-        const ipHex = this.padHex(ip);
-        const physHex = this.padHex(this.physAddr(cs, ip), 5);
-
-        machineState.calcLog = 
-            `----------------------------------\n` +
-            `CÁLCULO DO ENDEREÇO DE BUSCA (CS:IP)\n` +
-            `----------------------------------\n` +
-            `Fórmula: E.F. = (CS * 10H) + IP\n` +
-            `Passo 1: E.F. = (${csHex}H * 10H) + ${ipHex}H\n` +
-            `Passo 2: E.F. = ${csHex}0H + ${ipHex}H\n` +
-            `Resultado: E.F. = ${physHex}H\n` +
-            `\nNovo IP após busca: ${this.padHex(newIP)}H`;
-        
-        machineState.IP = newIP;
+        machineState.IP = (ip + size) & 0xFFFF;
         return log;
     },
 
@@ -175,7 +159,7 @@ const SimulatorCore = {
         return "Byte";
     },
 
-    // --- EXECUTE (ATUALIZADO: CÁLCULO DE DADOS) ---
+    // --- EXECUTE ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
@@ -188,6 +172,9 @@ const SimulatorCore = {
             if (dest === '[DI]') off = machineState.DI;
             const phys = this.physAddr(ds, off);
             
+            // Grava no Histórico
+            this.addHistory("Dados (DS:Off)", ds, off, phys);
+
             const low = valSrc & 0xFF;
             const high = (valSrc >> 8) & 0xFF;
 
@@ -202,21 +189,6 @@ const SimulatorCore = {
             }
             this.writeMem(phys, low, "Escrita Low");
             this.writeMem(phys+1, high, "Escrita High");
-
-            // --- CÁLCULO DE ENDEREÇO DE DADOS ---
-            const dsHex = this.padHex(ds);
-            const offHex = this.padHex(off);
-            const physDataHex = this.padHex(phys, 5);
-
-            machineState.calcLog += 
-                `\n\n----------------------------------\n` +
-                `CÁLCULO DO ENDEREÇO DE DADOS (DS:OFFSET)\n` +
-                `----------------------------------\n` +
-                `Fórmula: E.F. = (DS * 10H) + Offset\n` +
-                `Passo 1: E.F. = (${dsHex}H * 10H) + ${offHex}H\n` +
-                `Passo 2: E.F. = ${dsHex}0H + ${offHex}H\n` +
-                `Resultado: E.F. = ${physDataHex}H\n` +
-                `Dado Escrito: ${this.padHex(valSrc, 4)}H`;
         } 
         else if (machineState[dest] !== undefined) {
             machineState[dest] = valSrc;
@@ -278,15 +250,33 @@ function updateUI() {
     });
     document.getElementById('reg-flag-value').textContent = padHexUI(machineState.FLAGS) + 'H';
 
+    // Memória
     const memDiv = document.getElementById('memory-view');
     const sortedAddr = Object.keys(machineState.memory).sort((a,b) => parseInt(a,16) - parseInt(b,16));
-    let html = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
+    let htmlMem = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
     sortedAddr.forEach(addr => {
         const m = machineState.memory[addr];
-        html += `<tr><td><b>${addr}H</b></td><td class="mem-val">${SimulatorCore.padHex(m.val, 2)}H</td><td class="mem-desc">${m.desc}</td></tr>`;
+        htmlMem += `<tr><td><b>${addr}H</b></td><td class="mem-val">${SimulatorCore.padHex(m.val, 2)}H</td><td class="mem-desc">${m.desc}</td></tr>`;
     });
-    html += `</tbody></table>`;
-    memDiv.innerHTML = html;
+    htmlMem += `</tbody></table>`;
+    memDiv.innerHTML = htmlMem;
+
+    // NOVO: Tabela de Histórico de Cálculos
+    const calcDiv = document.getElementById('calc-history-view');
+    let htmlCalc = `<table class="memory-table"><thead><tr><th>Operação</th><th>Seg:Off</th><th>Cálculo (Seg*10+Off)</th><th>End. Físico</th></tr></thead><tbody>`;
+    
+    machineState.calcHistory.forEach(item => {
+        htmlCalc += `<tr>
+            <td style="color:#a5d6ff">${item.type}</td>
+            <td>${item.segOff}</td>
+            <td style="font-size:0.9em">${item.calc}</td>
+            <td class="mem-val">${item.res}H</td>
+        </tr>`;
+    });
+    htmlCalc += `</tbody></table>`;
+    calcDiv.innerHTML = htmlCalc;
+    // Scroll automático para o fim da tabela
+    calcDiv.scrollTop = calcDiv.scrollHeight;
 }
 
 function loadCode() {
@@ -313,10 +303,9 @@ async function simulateExecution(action) {
             AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
             IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
             memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
-            logs: "", calcLog: "", busWidth: currentMode
+            logs: "", calcHistory: [], busWidth: currentMode
         };
         document.getElementById('fluxo-output').textContent = "Simulador Resetado.";
-        document.getElementById('address-calculation-output').textContent = "";
         updateUI();
         return;
     }
@@ -340,7 +329,6 @@ async function simulateExecution(action) {
     const flux = document.getElementById('fluxo-output');
     flux.textContent += `\n\n[${padHexUI(machineState.currentInstructionIndex)}] ${line}\n${machineState.logs}`;
     flux.scrollTop = flux.scrollHeight;
-    document.getElementById('address-calculation-output').innerText = machineState.calcLog;
     
     machineState.currentInstructionIndex++;
     if (machineState.currentInstructionIndex >= machineState.instructions.length) stopAutoRun();
