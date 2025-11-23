@@ -7,7 +7,7 @@ let autoRunInterval = null;
 // Estes são os valores iniciais apenas para a primeira carga
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
-    CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000, // CS alterado para 4000
+    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, // CS alterado para 4000
     IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, // IP alterado para AE00
     FLAGS: 0x0002,
     memory: {}, 
@@ -343,4 +343,5 @@ function changeBusMode() {
 }
 
 document.addEventListener('DOMContentLoaded', updateUI);
+
 
