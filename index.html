@@ -55,7 +55,7 @@ JMP 0000
             
             <div class="button-group">
                 <button onclick="simulateExecution('init')">Carregar</button>
-                <button onclick="simulateExecution('step')">Passo</button>
+                <button onclick="simulateExecution('step')">Próximo Passo</button>
                 <button onclick="simulateExecution('reset')">Resetar</button>
                 <button id="btn-autorun" onclick="toggleAutoRun()">Executar Tudo</button>
                 <select id="bus-mode" onchange="changeBusMode()" style="padding: 8px; background: #21262d; color: white; border: 1px solid #30363d;">
@@ -66,7 +66,7 @@ JMP 0000
 
             <div id="status-message">Aguardando...</div>
 
-            <h3>Cálculo do Endereçamento (Atual):</h3>
+            <h3>Cálculo do Endereçamento:</h3>
             <div id="address-calculation-output"></div>
         </div>
 
@@ -95,3 +95,4 @@ JMP 0000
     <script src="script.js"></script>
 </body>
 </html>
+
