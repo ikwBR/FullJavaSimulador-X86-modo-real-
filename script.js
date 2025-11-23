@@ -1,5 +1,3 @@
-// script.js (VERSÃO FINAL COMPLETA: SUPORTE TOTAL A INSTRUÇÕES E OPCODES REAIS)
-
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
 
@@ -424,3 +422,4 @@ function stopAutoRun() {
 
 function changeBusMode() { document.getElementById('status-message').textContent = "Modo alterado. Resete para aplicar."; }
 document.addEventListener('DOMContentLoaded', updateUI);
+
