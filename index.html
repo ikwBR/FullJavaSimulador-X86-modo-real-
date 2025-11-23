@@ -58,17 +58,15 @@ JMP 0000
                 <button onclick="simulateExecution('step')">Executar Próximo Passo</button>
                 <button onclick="simulateExecution('reset')">Resetar</button>
                 <button id="btn-autorun" onclick="toggleAutoRun()">Executar Tudo</button>
-                <select id="bus-mode" onchange="changeBusMode()" style="padding: 8px; border-radius: 4px; background: #21262d; color: white; border: 1px solid #30363d; cursor: pointer;">
+                
+                <select id="bus-mode" onchange="changeBusMode()" style="padding: 8px; border-radius: 4px; background: #21262d; color: white; border: 1px solid #30363d; cursor: pointer; margin-left: 5px;">
                     <option value="8" selected>Barramento 8-bits (8088)</option>
                     <option value="16">Barramento 16-bits (8086)</option>
                 </select>
             </div>
 
             <div id="status-message">Aguardando...</div>
-
-            <h3>Cálculo do Endereçamento:</h3>
-            <div id="address-calculation-output"></div>
-        </div>
+            </div>
 
         <div id="registradores-deslocamento" class="section">
             <h2>Registradores de Deslocamento (OFFSET)</h2>
@@ -83,14 +81,17 @@ JMP 0000
             </table>
         </div>
 
-        <div id="memoria-principal" class="section">
+        <div id="memoria-principal" class="section" style="overflow-y: auto;">
             <h2>Memória Principal</h2>
-            <div id="memory-view">
+            <div id="memory-view" style="height: 250px; overflow-y: auto; margin-bottom: 15px; border-bottom: 1px solid #30363d;">
+                </div>
+
+            <h2 style="color: #68ff68; font-size: 1.0em;">Histórico de Endereçamento</h2>
+            <div id="calc-history-view" style="height: 200px; overflow-y: auto;">
                 </div>
         </div>
     </div>
 
     <script src="script.js"></script>
 </body>
-
 </html>
