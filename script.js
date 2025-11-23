@@ -1,12 +1,10 @@
-// script.js (VERSÃO HÍBRIDA: 8-BITS E 16-BITS SELECIONÁVEL)
+// script.js (VERSÃO CORRIGIDA - 16 BITS FORÇADO)
 
-const API_URL = 'http://127.0.0.1:5000/execute';
-
-// --- CONFIG ---
+// --- CONFIGURAÇÃO ---
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
 
-// --- ESTADO ---
+// --- ESTADO DA MÁQUINA ---
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
     CS: 0x1000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
@@ -18,7 +16,7 @@ let machineState = {
     busStep: 1,
     logs: "",     
     calcLog: "",
-    busWidth: 8 // Padrão 8 bits
+    busWidth: 8 // Será atualizado a cada passo
 };
 
 // ============================================================================
@@ -46,33 +44,11 @@ const SimulatorCore = {
 
     updateFlags: function(result) {
         const res16 = result & 0xFFFF;
-        if (res16 === 0) machineState.FLAGS |= (1 << 6);
+        if (res16 === 0) machineState.FLAGS |= (1 << 6); // ZF
         else machineState.FLAGS &= ~(1 << 6);
-        if (res16 & 0x8000) machineState.FLAGS |= (1 << 7);
+        if (res16 & 0x8000) machineState.FLAGS |= (1 << 7); // SF
         else machineState.FLAGS &= ~(1 << 7);
         machineState.FLAGS |= 0x0002;
-    },
-
-    // --- STACK (Sempre opera em 16 bits na arquitetura x86 real) ---
-    push: function(value) {
-        let sp = (machineState.SP - 2) & 0xFFFF;
-        machineState.SP = sp;
-        const addr = this.physAddr(machineState.SS, sp);
-        
-        // Na pilha o x86 sempre escreve a Word. 
-        // Visualmente, vamos manter detalhado na memória, mas o ciclo depende do barramento.
-        this.writeMem(addr, value & 0xFF, "PUSH Low");
-        this.writeMem(addr + 1, (value >> 8) & 0xFF, "PUSH High");
-        return addr;
-    },
-
-    pop: function() {
-        const sp = machineState.SP;
-        const addr = this.physAddr(machineState.SS, sp);
-        const low = this.readMem(addr);
-        const high = this.readMem(addr + 1);
-        machineState.SP = (sp + 2) & 0xFFFF;
-        return (high << 8) | low;
     },
 
     writeMem: function(physAddr, byteVal, desc) {
@@ -89,204 +65,174 @@ const SimulatorCore = {
     // --- MONTADOR ---
     assemble: function(op, dest, src, currentIP) {
         op = op.toUpperCase();
+        // MOV AX, IMM (3 Bytes: B8 XX XX)
         if (op === 'MOV' && dest === 'AX') {
             if (!['AX','BX','CX','DX','SI','DI','BP','SP'].includes(src) && src !== "") {
                 const val = this.hexToInt(src);
                 return [0xB8, val & 0xFF, val >> 8];
             }
         }
+        // ADD BX, AX (2 Bytes: 01 D8)
         if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xD8];
+        // MOV [SI], AX (2 Bytes: 89 04)
         if (op === 'MOV' && dest === '[SI]' && src === 'AX') return [0x89, 0x04];
+        // JMP (3 Bytes: E9 XX XX)
         if (op === 'JMP') {
             const target = this.hexToInt(dest);
             const nextIP = (currentIP + 3) & 0xFFFF;
             let offset = (target - nextIP) & 0xFFFF;
             return [0xE9, offset & 0xFF, offset >> 8];
         }
+        // MOV MEM, IMM (6 Bytes: C7 06 XX XX XX XX)
         if (op === 'MOV' && dest.startsWith('[') && src !== "" && !src.match(/[A-Z]/)) {
             const d = this.hexToInt(dest);
             const s = this.hexToInt(src);
             return [0xC7, 0x06, d & 0xFF, d >> 8, s & 0xFF, s >> 8];
         }
-        // Fallbacks
-        const mapOp = {
-            'MOV': 0x89, 'ADD': 0x01, 'SUB': 0x29, 'CMP': 0x39,
-            'AND': 0x21, 'OR': 0x09, 'XOR': 0x31, 'INC': 0x40, 'DEC': 0x48,
-            'PUSH': 0x50, 'POP': 0x58, 'CALL': 0xE8, 'RET': 0xC3
-        };
+        
+        // Genéricos
+        const mapOp = {'MOV':0x89, 'ADD':0x01, 'SUB':0x29, 'CMP':0x39, 'AND':0x21, 'OR':0x09, 'XOR':0x31, 'PUSH':0x50, 'POP':0x58};
         const base = mapOp[op] || 0x90;
-        if (op.startsWith('J') && op !== 'JMP') return [0x70, 0x00];
         if (['INC', 'DEC', 'PUSH', 'POP'].includes(op)) return [base];
-        return [base, 0xC0];
+        return [base, 0xC0]; 
     },
 
-    // --- FETCH (LÓGICA HÍBRIDA) ---
+    // --- FETCH ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS;
         const ip = machineState.IP;
-        
         const bytes = this.assemble(op, dest, src, ip);
         const size = bytes.length;
 
-        // --- MODO 8 BITS (8088) ---
-        if (machineState.busWidth === 8) {
-            bytes.forEach((byteVal, i) => {
+        // LÓGICA CRÍTICA: 8 BITS vs 16 BITS
+        if (machineState.busWidth === 16) {
+            // === MODO 16 BITS (Busca de WORD) ===
+            for (let i = 0; i < size; i += 2) {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 const addrHex = this.padHex(phys, 5);
                 
-                // Descrição
-                let desc = this.getByteDesc(op, size, i);
+                const low = bytes[i];
+                const high = (i + 1 < size) ? bytes[i+1] : null;
+
+                // Salva na memória visualmente (byte a byte para a tabela ficar bonita)
+                let descL = this.getDesc(op, size, i);
+                this.writeMem(phys, low, descL);
+                
+                let dataBusStr = "";
+                let busDesc = "";
+
+                if (high !== null) {
+                    // TEM 2 BYTES: BUSCA WORD COMPLETA
+                    let descH = this.getDesc(op, size, i+1);
+                    this.writeMem(phys+1, high, descH);
+                    
+                    // No barramento aparece: HighLow (Little Endian invertido visualmente)
+                    dataBusStr = this.padHex(high, 2) + this.padHex(low, 2);
+                    busDesc = "Word (16-bit)";
+                } else {
+                    // SOBROU 1 BYTE: BUSCA BYTE
+                    dataBusStr = this.padHex(low, 2);
+                    busDesc = "Byte (8-bit)";
+                }
 
                 log += `passo ${machineState.busStep++} ${addrHex} (BUS END) mp para mem\n`;
+                log += `passo ${machineState.busStep++} ${dataBusStr}H (BUS DADOS) mem para mp ; ${busDesc}\n`;
+            }
+        } else {
+            // === MODO 8 BITS (Busca de BYTE) ===
+            bytes.forEach((byteVal, i) => {
+                const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
+                const desc = this.getDesc(op, size, i);
+                
+                log += `passo ${machineState.busStep++} ${this.padHex(phys, 5)} (BUS END) mp para mem\n`;
                 log += `passo ${machineState.busStep++} ${this.padHex(byteVal, 2)}H (BUS DADOS) mem para mp ; ${desc}\n`;
                 
                 this.writeMem(phys, byteVal, desc);
             });
-        } 
-        // --- MODO 16 BITS (8086) ---
-        else {
-            for (let i = 0; i < size; i += 2) {
-                // Endereço base (Pares, ex: 10100, 10102)
-                const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
-                const addrHex = this.padHex(phys, 5);
-                
-                // Pega byte baixo e alto (se existir)
-                const low = bytes[i];
-                const high = (i + 1 < size) ? bytes[i+1] : null;
-                
-                let dataHex = "";
-                let desc = "";
-
-                // Salva na memória individualmente
-                let descLow = this.getByteDesc(op, size, i);
-                this.writeMem(phys, low, descLow);
-
-                if (high !== null) {
-                    // Word Fetch (16 bits)
-                    dataHex = this.padHex(high, 2) + this.padHex(low, 2); // Little Endian visual (HighLow)
-                    let descHigh = this.getByteDesc(op, size, i+1);
-                    this.writeMem(phys+1, high, descHigh);
-                    desc = `Word: ${descLow} / ${descHigh}`;
-                } else {
-                    // Sobrou 1 byte ímpar no final
-                    dataHex = this.padHex(low, 2); 
-                    desc = `Byte: ${descLow}`;
-                }
-
-                log += `passo ${machineState.busStep++} ${addrHex} (BUS END) mp para mem\n`;
-                log += `passo ${machineState.busStep++} ${dataHex}H (BUS DADOS) mem para mp ; ${desc}\n`;
-            }
         }
 
         const newIP = (ip + size) & 0xFFFF;
-        machineState.calcLog = `Busca (${machineState.busWidth}-bit): CS:IP = ${this.padHex(cs)}:${this.padHex(ip)}H\n` +
-                               `Endereço Físico: ${this.padHex(this.physAddr(cs, ip), 5)}H\n` +
-                               `Novo IP: ${this.padHex(newIP)}H`;
-        
+        machineState.calcLog = `Modo: ${machineState.busWidth}-bits\nCS:IP = ${this.padHex(cs)}:${this.padHex(ip)}H\nNovo IP: ${this.padHex(newIP)}H`;
         machineState.IP = newIP;
         return log;
     },
 
-    getByteDesc: function(op, size, i) {
-        if (op === 'MOV' && size === 6) return ["Opcode", "ModR/M", "Disp L", "Disp H", "Data L", "Data H"][i];
-        if (op === 'MOV' && size === 3) return ["Opcode", "Imm Low", "Imm High"][i];
-        if (op === 'ADD' && size === 2) return ["Opcode", "ModR/M"][i];
+    getDesc: function(op, size, i) {
+        if (op === 'MOV' && size === 6) return ["Opcode", "ModRM", "Disp L", "Disp H", "Imm L", "Imm H"][i];
+        if (op === 'MOV' && size === 3) return ["Opcode", "Imm L", "Imm H"][i];
+        if (op === 'ADD' && size === 2) return ["Opcode", "ModRM"][i];
         if (op === 'JMP') return ["Opcode", "Disp L", "Disp H"][i];
-        if (i===0) return "Opcode";
-        return "Operando";
+        if (i === 0) return "Opcode";
+        return "Byte";
     },
 
-    // --- EXECUTE CYCLE ---
+    // --- EXECUTE ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
-        
-        let valDest = machineState[dest] !== undefined ? machineState[dest] : this.hexToInt(dest);
         let valSrc = machineState[src] !== undefined ? machineState[src] : (src ? this.hexToInt(src) : 0);
 
-        if (op === 'MOV') {
-            if (dest.startsWith('[')) {
-                // ESCRITA NA MEMÓRIA
-                const ds = machineState.DS;
-                let off = this.hexToInt(dest);
-                if (dest === '[SI]') off = machineState.SI;
-                if (dest === '[DI]') off = machineState.DI;
-                const phys = this.physAddr(ds, off);
-                
-                // Divide em bytes
-                const byteLow = valSrc & 0xFF;
-                const byteHigh = (valSrc >> 8) & 0xFF;
+        if (op === 'MOV' && dest.startsWith('[')) {
+            // ESCRITA NA MEMÓRIA
+            const ds = machineState.DS;
+            let off = this.hexToInt(dest);
+            if (dest === '[SI]') off = machineState.SI;
+            if (dest === '[DI]') off = machineState.DI;
+            const phys = this.physAddr(ds, off);
+            
+            const low = valSrc & 0xFF;
+            const high = (valSrc >> 8) & 0xFF;
 
-                // --- ESCRITA 8 BITS (2 Ciclos) ---
-                if (machineState.busWidth === 8) {
-                    log += `passo ${machineState.busStep++} ${this.padHex(phys, 5)} (BUS END) mp para mem\n`;
-                    log += `passo ${machineState.busStep++} ${this.padHex(byteLow, 2)}H (BUS DADOS) mp para mem ; Byte Baixo\n`;
-                    
-                    log += `passo ${machineState.busStep++} ${this.padHex(phys+1, 5)} (BUS END) mp para mem\n`;
-                    log += `passo ${machineState.busStep++} ${this.padHex(byteHigh, 2)}H (BUS DADOS) mp para mem ; Byte Alto\n`;
-                } 
-                // --- ESCRITA 16 BITS (1 Ciclo - Assumindo alinhado) ---
-                else {
-                    log += `passo ${machineState.busStep++} ${this.padHex(phys, 5)} (BUS END) mp para mem\n`;
-                    // Barramento carrega a Word inteira (HighLow)
-                    log += `passo ${machineState.busStep++} ${this.padHex(valSrc, 4)}H (BUS DADOS) mp para mem ; Word Completa\n`;
-                }
-
-                // Atualiza Memória Visual
-                this.writeMem(phys, byteLow, `Escrita ${op} L`);
-                this.writeMem(phys+1, byteHigh, `Escrita ${op} H`);
-                machineState.calcLog += `\nEscrita em DS:OFF ${this.padHex(ds)}:${this.padHex(off)}H`;
-
-            } else if (machineState[dest] !== undefined) {
-                machineState[dest] = valSrc;
-                log += `; Interno: ${dest} = ${this.padHex(valSrc)}H\n`;
+            if (machineState.busWidth === 16) {
+                // --- ESCRITA 16 BITS (1 PASSO) ---
+                log += `passo ${machineState.busStep++} ${this.padHex(phys, 5)} (BUS END) mp para mem\n`;
+                // Barramento carrega a Word inteira (HighLow)
+                log += `passo ${machineState.busStep++} ${this.padHex(valSrc, 4)}H (BUS DADOS) mp para mem ; Word Escrita\n`;
+            } else {
+                // --- ESCRITA 8 BITS (2 PASSOS) ---
+                log += `passo ${machineState.busStep++} ${this.padHex(phys, 5)} (BUS END) mp para mem\n`;
+                log += `passo ${machineState.busStep++} ${this.padHex(low, 2)}H (BUS DADOS) mp para mem ; Byte Baixo\n`;
+                log += `passo ${machineState.busStep++} ${this.padHex(phys+1, 5)} (BUS END) mp para mem\n`;
+                log += `passo ${machineState.busStep++} ${this.padHex(high, 2)}H (BUS DADOS) mp para mem ; Byte Alto\n`;
             }
-        }
-        
-        else if (['ADD', 'SUB', 'AND', 'OR', 'XOR'].includes(op)) {
-            let res = 0;
-            if (op === 'ADD') res = valDest + valSrc;
-            if (op === 'SUB') res = valDest - valSrc;
-            if (op === 'AND') res = valDest & valSrc;
-            if (op === 'OR')  res = valDest | valSrc;
-            if (op === 'XOR') res = valDest ^ valSrc;
+            
+            this.writeMem(phys, low, "Escrita Low");
+            this.writeMem(phys+1, high, "Escrita High");
+
+        } else if (machineState[dest] !== undefined) {
+            machineState[dest] = valSrc;
+            log += `; Interno: ${dest} = ${this.padHex(valSrc)}H\n`;
+        } 
+        else if (op === 'ADD') {
+            let res = machineState[dest] + valSrc;
             machineState[dest] = res & 0xFFFF;
             this.updateFlags(res);
             log += `; ALU: ${dest} = ${this.padHex(machineState[dest])}H\n`;
         }
-
         else if (op === 'JMP') {
             machineState.IP = this.hexToInt(dest);
             log += `; JMP: IP = ${this.padHex(machineState.IP)}H\n`;
-        }
-
-        // PUSH/POP seguem lógica de pilha (geralmente usam barramento conforme largura)
-        // Simplificado aqui para manter consistência visual do log
-        else if (op === 'PUSH') {
-            const target = machineState[dest] !== undefined ? machineState[dest] : this.hexToInt(dest);
-            this.push(target);
-            log += `; Pilha: PUSH ${this.padHex(target)}H\n`;
-        }
-        else if (op === 'POP' && machineState[dest] !== undefined) {
-            machineState[dest] = this.pop();
-            log += `; Pilha: POP para ${dest}\n`;
         }
 
         return log;
     },
 
     runStep: function(line) {
+        // ATUALIZA O MODO BASEADO NO SELECT HTML A CADA PASSO
+        const select = document.getElementById('bus-mode');
+        if (select) {
+            machineState.busWidth = parseInt(select.value, 10);
+        } else {
+            machineState.busWidth = 8; // Fallback
+        }
+
         const cleanLine = line.split(';')[0].trim().toUpperCase();
         const match = cleanLine.match(/(\w+)(?:\s+([^,]+)(?:,\s*(.+))?)?$/);
+        if (!match) return { error: "Erro Sintaxe" };
         
-        if (!match) return { error: "Sintaxe inválida" };
-        const op = match[1];
-        const dest = match[2] ? match[2].trim() : "";
-        const src = match[3] ? match[3].trim() : "";
-
-        const logFetch = this.fetch(op, dest, src);
-        const logExec = this.execute(op, dest, src);
+        const logFetch = this.fetch(match[1], match[2]?match[2].trim():"", match[3]?match[3].trim():"");
+        const logExec = this.execute(match[1], match[2]?match[2].trim():"", match[3]?match[3].trim():"");
         
         machineState.logs = logFetch + logExec;
         return { success: true };
@@ -294,33 +240,10 @@ const SimulatorCore = {
 };
 
 // ============================================================================
-//  INTERFACE
+//  UI
 // ============================================================================
 
-function changeBusMode() {
-    const select = document.getElementById('bus-mode');
-    machineState.busWidth = parseInt(select.value);
-    document.getElementById('status-message').textContent = `Modo alterado para ${machineState.busWidth} bits. Resete para aplicar limpo.`;
-}
-
-function padHexUI(num) { 
-    return (num & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); 
-}
-
-function highlightChanges(oldState, newState) {
-    const keys = ['AX','BX','CX','DX','CS','SS','DS','ES','IP','SP','BP','DI','SI','FLAGS'];
-    keys.forEach(key => {
-        if (oldState[key] !== newState[key]) {
-            const id = key === 'FLAGS' ? 'reg-flag-value' : `reg-${key.toLowerCase()}`;
-            const el = document.getElementById(id);
-            if (el) {
-                el.classList.remove('blink');
-                void el.offsetWidth; 
-                el.classList.add('blink');
-            }
-        }
-    });
-}
+function padHexUI(num) { return (num & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
 
 function updateUI() {
     ['ax','bx','cx','dx','cs','ss','ds','es','ip','sp','bp','di','si'].forEach(r => {
@@ -330,7 +253,6 @@ function updateUI() {
 
     const memDiv = document.getElementById('memory-view');
     const sortedAddr = Object.keys(machineState.memory).sort((a,b) => parseInt(a,16) - parseInt(b,16));
-    
     let html = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
     sortedAddr.forEach(addr => {
         const m = machineState.memory[addr];
@@ -343,13 +265,9 @@ function updateUI() {
 function loadCode() {
     const raw = document.getElementById('assembly-code').value;
     machineState.instructions = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith(';'));
-    
-    if (machineState.instructions.length === 0) {
-        alert("Nenhum código válido!");
-        return false;
-    }
+    if (machineState.instructions.length === 0) return false;
     machineState.currentInstructionIndex = 0;
-    document.getElementById('status-message').textContent = `Carregado. ${machineState.instructions.length} instruções.`;
+    document.getElementById('status-message').textContent = `Carregado.`;
     return true;
 }
 
@@ -360,77 +278,44 @@ async function simulateExecution(action) {
         if(loadCode()) updateUI();
         return;
     }
-
     if (action === 'reset') {
         stopAutoRun();
-        machineState.AX = 0; machineState.BX = 0; machineState.CX = 0; machineState.DX = 0;
-        machineState.CS = 0x1000; machineState.SS = 0x2000; machineState.DS = 0x3000; machineState.ES = 0x4000;
-        machineState.IP = 0x0100; machineState.SP = 0xFFFE; machineState.BP = 0; 
-        machineState.DI = 0; machineState.SI = 0x0010; machineState.FLAGS = 0x0002;
-        machineState.memory = {};
-        machineState.currentInstructionIndex = 0;
-        machineState.busStep = 1;
-        machineState.logs = "";
-        machineState.calcLog = "";
-        
-        // Mantém o modo de barramento selecionado
-        const select = document.getElementById('bus-mode');
-        machineState.busWidth = parseInt(select.value);
-
-        document.getElementById('fluxo-output').textContent = "Simulador Resetado.";
+        machineState = {
+            AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x1000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
+            IP: 0x0100, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
+            memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
+            logs: "", calcLog: "", busWidth: 8
+        };
+        document.getElementById('fluxo-output').textContent = "Reset.";
         document.getElementById('address-calculation-output').textContent = "";
-        document.getElementById('status-message').textContent = "Pronto.";
         updateUI();
         return;
     }
-
-    if (machineState.instructions.length === 0) return;
-    if (machineState.currentInstructionIndex >= machineState.instructions.length) {
-        document.getElementById('status-message').textContent = "Fim do Código.";
-        stopAutoRun();
-        return;
+    if (machineState.instructions.length === 0 || machineState.currentInstructionIndex >= machineState.instructions.length) {
+        stopAutoRun(); return;
     }
 
     const line = machineState.instructions[machineState.currentInstructionIndex];
-    const oldState = { ...machineState };
-    const result = SimulatorCore.runStep(line);
-
-    if (result.error) {
-        document.getElementById('status-message').textContent = `Erro: ${result.error}`;
-        stopAutoRun();
-        return;
-    }
-
-    highlightChanges(oldState, machineState);
-    updateUI();
+    SimulatorCore.runStep(line);
     
+    updateUI();
     const flux = document.getElementById('fluxo-output');
     flux.textContent += `\n\n[${padHexUI(machineState.currentInstructionIndex)}] ${line}\n${machineState.logs}`;
     flux.scrollTop = flux.scrollHeight;
-    
     document.getElementById('address-calculation-output').textContent = machineState.calcLog;
-    machineState.currentInstructionIndex++;
     
-    if (machineState.currentInstructionIndex < machineState.instructions.length) {
-        document.getElementById('status-message').textContent = `Executada: ${line}`;
-    } else {
-        document.getElementById('status-message').textContent = "Fim da execução.";
-        stopAutoRun();
-    }
+    machineState.currentInstructionIndex++;
+    if (machineState.currentInstructionIndex >= machineState.instructions.length) stopAutoRun();
 }
 
 function toggleAutoRun() {
     if (autoRunInterval) stopAutoRun();
     else {
-        if (machineState.instructions.length === 0 || machineState.currentInstructionIndex >= machineState.instructions.length) return;
         const btn = document.getElementById('btn-autorun');
         btn.textContent = "Parar";
         btn.style.backgroundColor = "#da3633";
         simulateExecution('step');
-        autoRunInterval = setInterval(() => {
-            if (machineState.currentInstructionIndex >= machineState.instructions.length) stopAutoRun();
-            else simulateExecution('step');
-        }, AUTO_RUN_DELAY);
+        autoRunInterval = setInterval(() => simulateExecution('step'), AUTO_RUN_DELAY);
     }
 }
 
@@ -440,5 +325,8 @@ function stopAutoRun() {
     if (btn) { btn.textContent = "Executar Tudo"; btn.style.backgroundColor = ""; }
 }
 
-document.addEventListener('DOMContentLoaded', updateUI);
+function changeBusMode() {
+    document.getElementById('status-message').textContent = "Modo alterado. Resete para aplicar limpo.";
+}
 
+document.addEventListener('DOMContentLoaded', updateUI);
