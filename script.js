@@ -1,3 +1,4 @@
+// script.js (VERSÃO FINAL CORRIGIDA: SEM BUGS DE LOOP)
 
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
@@ -5,7 +6,7 @@ let autoRunInterval = null;
 // --- ESTADO ---
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
-    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000,
+    CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000, // Padrão
     IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010,
     FLAGS: 0x0002,
     memory: {}, 
@@ -13,7 +14,8 @@ let machineState = {
     currentInstructionIndex: 0,
     busStep: 1,
     logs: "",     
-    calcHistory: [], // <--- NOVO: Array para guardar histórico
+    calcLog: "",      // Texto para o meio
+    calcHistory: [],  // Lista para a direita
     busWidth: 8 
 };
 
@@ -60,9 +62,8 @@ const SimulatorCore = {
         return data ? data.val : 0;
     },
 
-    // --- HELPER PARA HISTÓRICO ---
+    // Adiciona ao histórico (tabela da direita)
     addHistory: function(type, seg, off, phys) {
-        // Adiciona ao topo da lista (ou fim, depende da preferencia visual)
         machineState.calcHistory.push({
             type: type,
             segOff: `${this.padHex(seg)}:${this.padHex(off)}`,
@@ -71,7 +72,6 @@ const SimulatorCore = {
         });
     },
 
-    // --- ASSEMBLE ---
     assemble: function(op, dest, src, currentIP) {
         op = op.toUpperCase();
         const regs = ['AX','BX','CX','DX','SI','DI','BP','SP','CS','DS','SS','ES'];
@@ -103,7 +103,6 @@ const SimulatorCore = {
         return [base, 0xC0];
     },
 
-    // --- FETCH ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS;
@@ -111,9 +110,18 @@ const SimulatorCore = {
         const bytes = this.assemble(op, dest, src, ip);
         const size = bytes.length;
 
-        // Grava no Histórico
+        // Histórico
         const physStart = this.physAddr(cs, ip);
-        this.addHistory("Busca (CS:IP)", cs, ip, physStart);
+        this.addHistory("Busca", cs, ip, physStart);
+
+        // Log Texto Meio
+        const csHex = this.padHex(cs);
+        const ipHex = this.padHex(ip);
+        const physHex = this.padHex(physStart, 5);
+        machineState.calcLog = 
+            `CÁLCULO (BUSCA):\n` +
+            `E.F. = (${csHex}H * 10H) + ${ipHex}H\n` +
+            `E.F. = ${csHex}0H + ${ipHex}H = ${physHex}H`;
 
         if (machineState.busWidth === 16) {
             for (let i = 0; i < size; i += 2) {
@@ -146,7 +154,9 @@ const SimulatorCore = {
             });
         }
 
-        machineState.IP = (ip + size) & 0xFFFF;
+        const newIP = (ip + size) & 0xFFFF;
+        machineState.calcLog += `\nNovo IP: ${this.padHex(newIP)}H`;
+        machineState.IP = newIP;
         return log;
     },
 
@@ -159,7 +169,6 @@ const SimulatorCore = {
         return "Byte";
     },
 
-    // --- EXECUTE ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
@@ -172,8 +181,17 @@ const SimulatorCore = {
             if (dest === '[DI]') off = machineState.DI;
             const phys = this.physAddr(ds, off);
             
-            // Grava no Histórico
-            this.addHistory("Dados (DS:Off)", ds, off, phys);
+            // Histórico
+            this.addHistory("Dados", ds, off, phys);
+            
+            // Log Texto Meio
+            const dsHex = this.padHex(ds);
+            const offHex = this.padHex(off);
+            const physHex = this.padHex(phys, 5);
+            machineState.calcLog += 
+                `\n\nCÁLCULO (DADOS):\n` +
+                `E.F. = (${dsHex}H * 10H) + ${offHex}H\n` +
+                `E.F. = ${dsHex}0H + ${offHex}H = ${physHex}H`;
 
             const low = valSrc & 0xFF;
             const high = (valSrc >> 8) & 0xFF;
@@ -261,22 +279,26 @@ function updateUI() {
     htmlMem += `</tbody></table>`;
     memDiv.innerHTML = htmlMem;
 
-    // NOVO: Tabela de Histórico de Cálculos
-    const calcDiv = document.getElementById('calc-history-view');
-    let htmlCalc = `<table class="memory-table"><thead><tr><th>Operação</th><th>Seg:Off</th><th>Cálculo (Seg*10+Off)</th><th>End. Físico</th></tr></thead><tbody>`;
-    
-    machineState.calcHistory.forEach(item => {
-        htmlCalc += `<tr>
-            <td style="color:#a5d6ff">${item.type}</td>
-            <td>${item.segOff}</td>
-            <td style="font-size:0.9em">${item.calc}</td>
-            <td class="mem-val">${item.res}H</td>
+    // Histórico (Tabela Direita)
+    const histDiv = document.getElementById('calc-history-view');
+    let htmlHist = `<table class="memory-table"><thead><tr><th>Tipo</th><th>Seg:Off</th><th>Cálculo</th><th>Físico</th></tr></thead><tbody>`;
+    machineState.calcHistory.forEach(h => {
+        htmlHist += `<tr>
+            <td style="color:#79c0ff">${h.type}</td>
+            <td>${h.segOff}</td>
+            <td style="font-size:0.85em">${h.calc}</td>
+            <td class="mem-val">${h.res}H</td>
         </tr>`;
     });
-    htmlCalc += `</tbody></table>`;
-    calcDiv.innerHTML = htmlCalc;
-    // Scroll automático para o fim da tabela
-    calcDiv.scrollTop = calcDiv.scrollHeight;
+    htmlHist += `</tbody></table>`;
+    histDiv.innerHTML = htmlHist;
+    histDiv.scrollTop = histDiv.scrollHeight;
+
+    // Texto do Meio (Atual) - AGORA ATUALIZADO E EXISTENTE
+    const calcMidDiv = document.getElementById('address-calculation-output');
+    if (calcMidDiv) {
+        calcMidDiv.innerText = machineState.calcLog;
+    }
 }
 
 function loadCode() {
@@ -303,12 +325,13 @@ async function simulateExecution(action) {
             AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
             IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
             memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
-            logs: "", calcHistory: [], busWidth: currentMode
+            logs: "", calcLog: "", calcHistory: [], busWidth: currentMode
         };
         document.getElementById('fluxo-output').textContent = "Simulador Resetado.";
         updateUI();
         return;
     }
+    
     if (machineState.instructions.length === 0 || machineState.currentInstructionIndex >= machineState.instructions.length) {
         stopAutoRun(); return;
     }
@@ -356,4 +379,3 @@ function changeBusMode() {
 }
 
 document.addEventListener('DOMContentLoaded', updateUI);
-
