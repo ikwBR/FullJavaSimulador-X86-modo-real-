@@ -1,12 +1,17 @@
-// script.js (VERSÃO FINAL CORRIGIDA: SEM BUGS DE LOOP)
 
+// --- CONFIGURAÇÃO ---
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
 
-// --- ESTADO ---
+// --- ESTADO DA MÁQUINA (INICIAL) ---
 let machineState = {
     AX: 0, BX: 0, CX: 0, DX: 0,
-    CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, // Padrão
+    // --- VALORES PERSONALIZADOS AQUI ---
+    CS: 0x4000, 
+    SS: 0x5000, 
+    DS: 0x6000, 
+    ES: 0x7000,
+    // -----------------------------------
     IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010,
     FLAGS: 0x0002,
     memory: {}, 
@@ -14,13 +19,13 @@ let machineState = {
     currentInstructionIndex: 0,
     busStep: 1,
     logs: "",     
-    calcLog: "",      // Texto para o meio
-    calcHistory: [],  // Lista para a direita
+    calcLog: "",
+    calcHistory: [], 
     busWidth: 8 
 };
 
 // ============================================================================
-//  CORE
+//  CORE DO SIMULADOR
 // ============================================================================
 
 const SimulatorCore = {
@@ -62,7 +67,6 @@ const SimulatorCore = {
         return data ? data.val : 0;
     },
 
-    // Adiciona ao histórico (tabela da direita)
     addHistory: function(type, seg, off, phys) {
         machineState.calcHistory.push({
             type: type,
@@ -72,6 +76,7 @@ const SimulatorCore = {
         });
     },
 
+    // --- ASSEMBLE ---
     assemble: function(op, dest, src, currentIP) {
         op = op.toUpperCase();
         const regs = ['AX','BX','CX','DX','SI','DI','BP','SP','CS','DS','SS','ES'];
@@ -103,6 +108,7 @@ const SimulatorCore = {
         return [base, 0xC0];
     },
 
+    // --- FETCH ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS;
@@ -110,11 +116,9 @@ const SimulatorCore = {
         const bytes = this.assemble(op, dest, src, ip);
         const size = bytes.length;
 
-        // Histórico
         const physStart = this.physAddr(cs, ip);
         this.addHistory("Busca", cs, ip, physStart);
 
-        // Log Texto Meio
         const csHex = this.padHex(cs);
         const ipHex = this.padHex(ip);
         const physHex = this.padHex(physStart, 5);
@@ -169,6 +173,7 @@ const SimulatorCore = {
         return "Byte";
     },
 
+    // --- EXECUTE ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
@@ -181,10 +186,8 @@ const SimulatorCore = {
             if (dest === '[DI]') off = machineState.DI;
             const phys = this.physAddr(ds, off);
             
-            // Histórico
             this.addHistory("Dados", ds, off, phys);
             
-            // Log Texto Meio
             const dsHex = this.padHex(ds);
             const offHex = this.padHex(off);
             const physHex = this.padHex(phys, 5);
@@ -268,7 +271,6 @@ function updateUI() {
     });
     document.getElementById('reg-flag-value').textContent = padHexUI(machineState.FLAGS) + 'H';
 
-    // Memória
     const memDiv = document.getElementById('memory-view');
     const sortedAddr = Object.keys(machineState.memory).sort((a,b) => parseInt(a,16) - parseInt(b,16));
     let htmlMem = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
@@ -279,26 +281,19 @@ function updateUI() {
     htmlMem += `</tbody></table>`;
     memDiv.innerHTML = htmlMem;
 
-    // Histórico (Tabela Direita)
     const histDiv = document.getElementById('calc-history-view');
-    let htmlHist = `<table class="memory-table"><thead><tr><th>Tipo</th><th>Seg:Off</th><th>Cálculo</th><th>Físico</th></tr></thead><tbody>`;
-    machineState.calcHistory.forEach(h => {
-        htmlHist += `<tr>
-            <td style="color:#79c0ff">${h.type}</td>
-            <td>${h.segOff}</td>
-            <td style="font-size:0.85em">${h.calc}</td>
-            <td class="mem-val">${h.res}H</td>
-        </tr>`;
-    });
-    htmlHist += `</tbody></table>`;
-    histDiv.innerHTML = htmlHist;
-    histDiv.scrollTop = histDiv.scrollHeight;
-
-    // Texto do Meio (Atual) - AGORA ATUALIZADO E EXISTENTE
-    const calcMidDiv = document.getElementById('address-calculation-output');
-    if (calcMidDiv) {
-        calcMidDiv.innerText = machineState.calcLog;
+    if (histDiv) {
+        let htmlHist = `<table class="memory-table"><thead><tr><th>Tipo</th><th>Seg:Off</th><th>Cálculo</th><th>Físico</th></tr></thead><tbody>`;
+        machineState.calcHistory.forEach(h => {
+            htmlHist += `<tr><td style="color:#79c0ff">${h.type}</td><td>${h.segOff}</td><td style="font-size:0.85em">${h.calc}</td><td class="mem-val">${h.res}H</td></tr>`;
+        });
+        htmlHist += `</tbody></table>`;
+        histDiv.innerHTML = htmlHist;
+        histDiv.scrollTop = histDiv.scrollHeight;
     }
+
+    const calcMidDiv = document.getElementById('address-calculation-output');
+    if (calcMidDiv) calcMidDiv.innerText = machineState.calcLog;
 }
 
 function loadCode() {
@@ -321,13 +316,18 @@ async function simulateExecution(action) {
         stopAutoRun();
         const select = document.getElementById('bus-mode');
         const currentMode = select ? parseInt(select.value, 10) : 8;
+        
         machineState = {
-            AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x4000, SS: 0x2000, DS: 0x3000, ES: 0x4000,
-            IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
+            AX: 0, BX: 0, CX: 0, DX: 0, 
+            // --- VALORES ALTERADOS AQUI ---
+            CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, 
+            IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, 
+            FLAGS: 0x0002,
             memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
             logs: "", calcLog: "", calcHistory: [], busWidth: currentMode
         };
         document.getElementById('fluxo-output').textContent = "Simulador Resetado.";
+        document.getElementById('address-calculation-output').textContent = "";
         updateUI();
         return;
     }
@@ -379,4 +379,3 @@ function changeBusMode() {
 }
 
 document.addEventListener('DOMContentLoaded', updateUI);
-
