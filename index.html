@@ -27,7 +27,7 @@
         </div>
 
         <div id="registradores-segmentos" class="section">
-            <h2>Registradores Seletores de Segmentos</h2>
+            <h2>Registradores Seletores</h2>
             <table>
                 <tbody id="reg-segmentos-body">
                     <tr><th>CS</th><td id="reg-cs"></td></tr>
@@ -44,9 +44,9 @@
         </div>
 
         <div id="codigo-editor" class="section">
-            <h2>Simulador Assembly x86 (Modo Real)</h2>
+            <h2>Simulador Assembly x86</h2>
             <textarea id="assembly-code" placeholder="Insira seu código Assembly aqui...">
-; Exemplo Completo:
+; Exemplo:
 MOV AX, 1234H
 ADD BX, AX
 MOV [SI], AX
@@ -54,22 +54,24 @@ JMP 0000
             </textarea>
             
             <div class="button-group">
-                <button onclick="simulateExecution('init')">Carregar Código</button>
-                <button onclick="simulateExecution('step')">Executar Próximo Passo</button>
+                <button onclick="simulateExecution('init')">Carregar</button>
+                <button onclick="simulateExecution('step')">Passo</button>
                 <button onclick="simulateExecution('reset')">Resetar</button>
                 <button id="btn-autorun" onclick="toggleAutoRun()">Executar Tudo</button>
-                
-                <select id="bus-mode" onchange="changeBusMode()" style="padding: 8px; border-radius: 4px; background: #21262d; color: white; border: 1px solid #30363d; cursor: pointer; margin-left: 5px;">
-                    <option value="8" selected>Barramento 8-bits (8088)</option>
-                    <option value="16">Barramento 16-bits (8086)</option>
+                <select id="bus-mode" onchange="changeBusMode()" style="padding: 8px; background: #21262d; color: white; border: 1px solid #30363d;">
+                    <option value="8">Barramento 8-bits (8088)</option>
+                    <option value="16" selected>Barramento 16-bits (8086)</option>
                 </select>
             </div>
 
             <div id="status-message">Aguardando...</div>
-            </div>
+
+            <h3>Cálculo do Endereçamento (Atual):</h3>
+            <div id="address-calculation-output"></div>
+        </div>
 
         <div id="registradores-deslocamento" class="section">
-            <h2>Registradores de Deslocamento (OFFSET)</h2>
+            <h2>Registradores de Deslocamento</h2>
             <table>
                 <tbody id="reg-offset-body">
                     <tr><th>IP</th><td id="reg-ip"></td></tr>
@@ -83,12 +85,10 @@ JMP 0000
 
         <div id="memoria-principal" class="section" style="overflow-y: auto;">
             <h2>Memória Principal</h2>
-            <div id="memory-view" style="height: 250px; overflow-y: auto; margin-bottom: 15px; border-bottom: 1px solid #30363d;">
-                </div>
+            <div id="memory-view" style="height: 250px; overflow-y: auto; margin-bottom: 15px; border-bottom: 1px solid #30363d;"></div>
 
-            <h2 style="color: #68ff68; font-size: 1.0em;">Histórico de Endereçamento</h2>
-            <div id="calc-history-view" style="height: 200px; overflow-y: auto;">
-                </div>
+            <h2 style="color: #68ff68; font-size: 1.0em; margin-top: 10px;">Histórico de Cálculos</h2>
+            <div id="calc-history-view" style="height: 150px; overflow-y: auto;"></div>
         </div>
     </div>
 
