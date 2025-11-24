@@ -1,28 +1,264 @@
-/* --- ADICIONE NO FINAL DO style.css --- */
+/* style.css - VERSÃO FINAL COMPLETA */
 
-/* Estilo para os Inputs dos Registradores */
+/* --- VARIÁVEIS DE COR (TEMA DARK) --- */
+:root {
+    --bg-main: #0d1117;
+    --bg-section: #161b22;
+    --border-color: #30363d;
+    --text-primary: #c9d1d9;
+    --text-highlight: #58a6ff; /* Azul */
+    --text-success: #68ff68;    /* Verde (Logs) */
+    --text-value: #ff9900;      /* Laranja (Registradores) */
+    --text-warning: #e3b341;    /* Amarelo (Status) */
+    --btn-bg: #21262d;
+    --btn-hover: #30363d;
+}
+
+body {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace; /* Fonte monoespaçada para tudo ficar alinhado */
+    background-color: var(--bg-main);
+    color: var(--text-primary);
+    margin: 20px;
+}
+
+/* --- LAYOUT DE GRADE (GRID) --- */
+.grid-container {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr 1fr; /* Esquerda, Meio (maior), Direita */
+    grid-template-areas: 
+        "fluxo editor memoria"
+        "r-gerais editor memoria"
+        "r-segmentos r-deslocamento memoria"
+        "r-flag r-deslocamento memoria";
+    gap: 20px;
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* Mapeamento das Áreas */
+#fluxo-barramento { grid-area: fluxo; }
+#codigo-editor { grid-area: editor; }
+#memoria-principal { grid-area: memoria; }
+#registradores-gerais { grid-area: r-gerais; }
+#registradores-segmentos { grid-area: r-segmentos; }
+#registradores-deslocamento { grid-area: r-deslocamento; }
+#registrador-flag { grid-area: r-flag; }
+
+/* --- ESTILO DAS CAIXAS (SEÇÕES) --- */
+.section {
+    background-color: var(--bg-section);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    display: flex;
+    flex-direction: column;
+}
+
+h2, h3 {
+    font-size: 1.1em;
+    margin-top: 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 5px;
+    color: var(--text-highlight);
+}
+
+h3 {
+    font-size: 1.0em;
+    color: var(--text-success);
+    margin-top: 15px;
+    border-bottom: none;
+}
+
+/* --- TABELAS GENÉRICAS (Registradores) --- */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 1.1em;
+}
+
+th, td {
+    border: 1px solid var(--border-color);
+    padding: 5px 10px;
+    text-align: left;
+}
+
+th {
+    background-color: #21262d;
+    color: var(--text-primary);
+    width: 30%;
+}
+
+td {
+    color: var(--text-value); /* Laranja */
+    font-weight: bold;
+}
+
+/* --- INPUTS DE REGISTRADORES (EDIÇÃO MANUAL) --- */
 .reg-input {
     background-color: transparent;
-    border: 1px solid transparent; /* Sem borda até clicar */
-    color: #ff9900; /* Cor Laranja */
-    font-family: monospace;
+    border: 1px solid transparent; /* Invisível até clicar */
+    color: var(--text-value);
+    font-family: inherit;
     font-size: 1em;
+    font-weight: bold;
     width: 60px;
     text-align: center;
     border-radius: 4px;
     outline: none;
+    padding: 0;
+    margin: 0;
 }
 
-/* Quando clica para editar */
 .reg-input:focus {
-    border: 1px solid #58a6ff; /* Borda azul ao focar */
+    border: 1px solid var(--text-highlight);
     background-color: #0d1117;
     color: #ffffff;
 }
 
-/* O 'H' que fica do lado do número */
 .hex-suffix {
-    color: #ff9900;
-    font-family: monospace;
+    color: #8b949e; /* Cinza para o 'H' */
+    font-size: 0.8em;
     margin-left: 2px;
+}
+
+/* --- ÁREA DO EDITOR DE CÓDIGO --- */
+textarea {
+    width: 98%;
+    height: 300px;
+    background-color: var(--bg-main);
+    border: 1px solid var(--border-color);
+    color: #e6edf3;
+    font-family: 'Consolas', monospace;
+    font-size: 1.1em;
+    padding: 10px;
+    resize: vertical;
+    border-radius: 4px;
+}
+
+textarea:focus {
+    outline: 1px solid var(--text-highlight);
+}
+
+/* Botões */
+.button-group {
+    margin-top: 10px;
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+button, select {
+    background-color: var(--btn-bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    padding: 8px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9em;
+    transition: background-color 0.2s;
+}
+
+button:hover {
+    background-color: var(--btn-hover);
+    border-color: #8b949e;
+}
+
+button:active {
+    background-color: #30363d;
+}
+
+/* Mensagem de Status */
+#status-message {
+    margin-top: 15px;
+    font-weight: bold;
+    color: var(--text-warning);
+    min-height: 20px; /* Evita pulo de layout */
+}
+
+/* --- FLUXO DE BARRAMENTO (LOG) --- */
+#fluxo-output {
+    height: 400px;
+    overflow-y: auto;
+    background-color: var(--bg-main);
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    white-space: pre-wrap;
+    font-size: 0.85em;
+    color: var(--text-success);
+    line-height: 1.4;
+    border-radius: 4px;
+}
+
+/* --- ÁREA DE CÁLCULO --- */
+#address-calculation-output {
+    background-color: var(--bg-main);
+    padding: 10px;
+    border: 1px dashed var(--border-color);
+    color: #79c0ff;
+    white-space: pre-wrap;
+    font-size: 0.9em;
+    border-radius: 4px;
+    min-height: 50px;
+}
+
+/* --- TABELA DE MEMÓRIA E HISTÓRICO (Personalizada) --- */
+.memory-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95em;
+}
+
+.memory-table th {
+    background-color: #21262d;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.memory-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid #21262d;
+    color: #c9d1d9; /* Texto normal */
+    font-weight: normal;
+}
+
+.mem-val {
+    color: var(--text-value); /* Laranja */
+    font-weight: bold;
+    text-align: center;
+}
+
+.mem-desc {
+    color: #8b949e; /* Cinza claro para descrição */
+    font-style: italic;
+    font-size: 0.9em;
+}
+
+/* Scrollbars Personalizadas (Fica mais bonito no Chrome/Edge) */
+::-webkit-scrollbar {
+    width: 10px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg-main); 
+}
+::-webkit-scrollbar-thumb {
+    background: #30363d; 
+    border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #8b949e; 
+}
+
+/* --- ANIMAÇÃO DE PISCAR (HIGHLIGHT) --- */
+@keyframes blinkEffect {
+    0% { background-color: transparent; color: var(--text-value); }
+    50% { background-color: rgba(46, 160, 67, 0.4); color: #ffffff; border-radius: 4px; } /* Verde translúcido */
+    100% { background-color: transparent; color: var(--text-value); }
+}
+
+.blink {
+    animation: blinkEffect 0.6s ease-in-out 2; /* Duração 0.6s, repete 2x */
 }
