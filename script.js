@@ -1,4 +1,4 @@
-// script.js (VERSÃO FINAL: REGISTRADORES EDITÁVEIS)
+// script.js (VERSÃO FINAL: DESCRIÇÕES DINÂMICAS NA MEMÓRIA)
 
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
@@ -20,7 +20,7 @@ let machineState = {
 };
 
 // ============================================================================
-//  CORE
+//  CORE DO SIMULADOR
 // ============================================================================
 
 const SimulatorCore = {
@@ -68,8 +68,8 @@ const SimulatorCore = {
         let sp = (machineState.SP - 2) & 0xFFFF;
         machineState.SP = sp;
         const addr = this.physAddr(machineState.SS, sp);
-        this.writeMem(addr, value & 0xFF, "PUSH Low");
-        this.writeMem(addr + 1, (value >> 8) & 0xFF, "PUSH High");
+        this.writeMem(addr, value & 0xFF, "Pilha (Byte Baixo)");
+        this.writeMem(addr + 1, (value >> 8) & 0xFF, "Pilha (Byte Alto)");
         return addr;
     },
     pop: function() {
@@ -86,27 +86,26 @@ const SimulatorCore = {
         op = op.toUpperCase();
         const regs = ['AX','BX','CX','DX','SI','DI','BP','SP','CS','DS','SS','ES'];
 
+        // 1. MOV MEM, IMM (6 Bytes)
         if (op === 'MOV' && dest.startsWith('[') && src !== "" && !regs.includes(src)) {
             const d = this.hexToInt(dest); const s = this.hexToInt(src);
             return [0xC7, 0x06, d & 0xFF, d >> 8, s & 0xFF, s >> 8];
         }
+        // 2. MOV AX, IMM (3 Bytes)
         if (op === 'MOV' && dest === 'AX' && !regs.includes(src) && src !== "") {
             const val = this.hexToInt(src); return [0xB8, val & 0xFF, val >> 8];
         }
+        // 3. CASOS ESPECÍFICOS
         if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xD8];
         if (op === 'MOV' && dest === '[SI]' && src === 'AX') return [0x89, 0x04];
-        
-        if (op === 'JMP') {
-            const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
-            let offset = (target - nextIP) & 0xFFFF; return [0xE9, offset & 0xFF, offset >> 8];
-        }
 
-        // Genéricos e Simplificados
+        // --- OUTROS ---
         if (op === 'RET') return [0xC3];
         if (op === 'IRET') return [0xCF];
         if (op === 'PUSHF') return [0x9C];
         if (op === 'POPF') return [0x9D];
-        if (op === 'PUSH' && regs.includes(dest)) return [0x50];
+
+        if (op === 'PUSH' && regs.includes(dest)) return [0x50]; 
         if (op === 'POP' && regs.includes(dest)) return [0x58];
         if (op === 'INC' && regs.includes(dest)) return [0x40];
         if (op === 'DEC' && regs.includes(dest)) return [0x48];
@@ -120,7 +119,11 @@ const SimulatorCore = {
         if (op === 'NEG') return [0xF7, 0xD8];
         if (op === 'NOT') return [0xF7, 0xD0];
 
-        if (op === 'CALL') {
+        if (op === 'JMP') { 
+            const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
+            let offset = (target - nextIP) & 0xFFFF; return [0xE9, offset & 0xFF, offset >> 8];
+        }
+        if (op === 'CALL') { 
             const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
             let offset = (target - nextIP) & 0xFFFF; return [0xE8, offset & 0xFF, offset >> 8];
         }
@@ -132,6 +135,42 @@ const SimulatorCore = {
         if (op === 'OUT') return [0xE6, 0x00];
 
         return [0x89, 0xC0];
+    },
+
+    // --- DESCRIÇÕES INTELIGENTES ---
+    getDesc: function(op, dest, src, size, i) {
+        op = op.toUpperCase();
+        
+        // MOV MEM, IMM
+        if (op === 'MOV' && size === 6) {
+            return [
+                `Opcode (MOV Mem, Imm)`, 
+                `ModRM (Endereço Direto)`, 
+                `Disp Low (${dest})`, `Disp High (${dest})`, 
+                `Dado Low (${src})`, `Dado High (${src})`
+            ][i];
+        }
+        
+        // MOV AX, IMM
+        if (op === 'MOV' && dest === 'AX' && size === 3) {
+            return [`Opcode (MOV AX, Imm)`, `Dado Low (${src})`, `Dado High (${src})`][i];
+        }
+
+        // Instruções de 2 Bytes (ADD, MOV Reg, etc)
+        if (size === 2) {
+            if (i === 0) return `Opcode (${op})`;
+            // ModRM Dinâmico: Mostra quem são os operandos
+            return `ModRM (Dest:${dest}, Src:${src})`;
+        }
+
+        // JMP / CALL
+        if ((op === 'JMP' || op === 'CALL') && size === 3) {
+            return [`Opcode (${op})`, `Offset Low`, `Offset High`][i];
+        }
+
+        // Fallback
+        if (i === 0) return `Opcode (${op} ${dest})`;
+        return "Operando / Byte";
     },
 
     // --- FETCH ---
@@ -152,16 +191,19 @@ const SimulatorCore = {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 const addrHex = this.padHex(phys, 5);
                 const low = bytes[i]; const high = (i + 1 < size) ? bytes[i+1] : null;
-                let descL = this.getDesc(op, size, i);
+                
+                let descL = this.getDesc(op, dest, src, size, i);
                 this.writeMem(phys, low, descL);
+                
                 let dataBusStr = "";
                 if (high !== null) {
-                    let descH = this.getDesc(op, size, i+1);
+                    let descH = this.getDesc(op, dest, src, size, i+1);
                     this.writeMem(phys+1, high, descH);
                     dataBusStr = this.padHex(high, 2) + this.padHex(low, 2);
                 } else {
                     dataBusStr = this.padHex(low, 2);
                 }
+                
                 let label = (i === 0) ? op : `${dataBusStr}H`;
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${addrHex} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MEM para MP): ${label} (BUS DADOS)\n`;
@@ -169,7 +211,9 @@ const SimulatorCore = {
         } else {
             bytes.forEach((b, i) => {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
-                this.writeMem(phys, b, this.getDesc(op, size, i));
+                let desc = this.getDesc(op, dest, src, size, i);
+                this.writeMem(phys, b, desc);
+                
                 let label = (i === 0) ? op : `${this.padHex(b, 2)}H`;
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MEM para MP): ${label} (BUS DADOS)\n`;
@@ -178,14 +222,6 @@ const SimulatorCore = {
         machineState.IP = (ip + size) & 0xFFFF;
         machineState.calcLog += `\nNovo IP: ${this.padHex(machineState.IP)}H`;
         return log;
-    },
-
-    getDesc: function(op, size, i) {
-        if (op === 'MOV' && size === 6) return ["Opcode", "ModRM", "Disp L", "Disp H", "Imm L", "Imm H"][i];
-        if (op === 'MOV' && size === 3) return ["Opcode", "Imm L", "Imm H"][i];
-        if (op === 'ADD' && size === 2) return ["Opcode", "ModRM"][i];
-        if (op === 'JMP') return ["Opcode", "Disp L", "Disp H"][i];
-        return i===0 ? "Opcode" : "Byte";
     },
 
     // --- EXECUTE ---
@@ -207,8 +243,9 @@ const SimulatorCore = {
 
             const low = valSrc & 0xFF; const high = (valSrc >> 8) & 0xFF;
             
-            const descL = `Dado Gravado (Byte Baixo)`;
-            const descH = `Dado Gravado (Byte Alto)`;
+            // Descrições de Escrita
+            const descL = `Escrita ${src} (Byte Baixo)`;
+            const descH = `Escrita ${src} (Byte Alto)`;
 
             if (machineState.busWidth === 16) {
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
@@ -266,8 +303,7 @@ const SimulatorCore = {
     }
 };
 
-// --- UI: ATUALIZADA PARA INPUTS EDITÁVEIS ---
-
+// --- UI ---
 function padHexUI(num) { return (num & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
 
 function highlightChanges(oldState, newState) {
@@ -278,7 +314,6 @@ function highlightChanges(oldState, newState) {
             const td = document.getElementById(id);
             if(td) {
                 const input = td.querySelector('input');
-                // Pisca a borda do input ou o background do TD
                 if(input) {
                     input.classList.remove('blink');
                     void input.offsetWidth; 
@@ -289,55 +324,40 @@ function highlightChanges(oldState, newState) {
     });
 }
 
-// NOVA FUNÇÃO: Atualiza manualmente o machineState quando o usuário digita
 function manualUpdate(reg, valueStr) {
     const val = SimulatorCore.hexToInt(valueStr);
     if (reg === 'FLAGS') machineState.FLAGS = val;
     else machineState[reg] = val;
-    
-    // Re-renderiza para formatar bonito (ex: user digita "a", vira "000A")
     updateUI();
-    
-    // Log visual opcional
     const status = document.getElementById('status-message');
-    if(status) status.textContent = `${reg} alterado manualmente para ${SimulatorCore.padHex(val)}H`;
+    if(status) status.textContent = `${reg} alterado manualmente.`;
 }
 
 function updateUI() {
     const regs = ['AX','BX','CX','DX','CS','SS','DS','ES','IP','SP','BP','DI','SI','FLAGS'];
-    
     regs.forEach(r => {
         const id = r === 'FLAGS' ? 'reg-flag-value' : `reg-${r.toLowerCase()}`;
         const cell = document.getElementById(id);
         if (!cell) return;
-
-        // Verifica se já tem input, senão cria
         let input = cell.querySelector('input');
         if (!input) {
-            cell.innerHTML = ''; // Limpa texto antigo
+            cell.innerHTML = '';
             input = document.createElement('input');
             input.className = 'reg-input';
             input.type = 'text';
             input.maxLength = 4;
-            // Evento: Quando mudar e sair do campo (blur) ou der Enter
             input.onchange = (e) => manualUpdate(r, e.target.value);
-            
             cell.appendChild(input);
-            
-            // Adiciona o sufixo "H" visualmente
             const suffix = document.createElement('span');
             suffix.className = 'hex-suffix';
             suffix.innerText = 'H';
             cell.appendChild(suffix);
         }
-
-        // Só atualiza o valor se o usuário NÃO estiver digitando nele agora
         if (document.activeElement !== input) {
             input.value = padHexUI(machineState[r]);
         }
     });
 
-    // Atualiza Tabelas (Memória e Histórico) - Manteve igual
     const memDiv = document.getElementById('memory-view');
     const sortedAddr = Object.keys(machineState.memory).sort((a,b) => parseInt(a,16) - parseInt(b,16));
     let htmlMem = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
@@ -375,8 +395,7 @@ async function simulateExecution(action) {
         const select = document.getElementById('bus-mode');
         const currentMode = select ? parseInt(select.value, 10) : 8;
         machineState = {
-            AX: 0, BX: 0, CX: 0, DX: 0, 
-            CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, 
+            AX: 0, BX: 0, CX: 0, DX: 0, CS: 0x4000, SS: 0x5000, DS: 0x6000, ES: 0x7000, 
             IP: 0xAE00, SP: 0xFFFE, BP: 0, DI: 0, SI: 0x0010, FLAGS: 0x0002,
             memory: {}, instructions: [], currentInstructionIndex: 0, busStep: 1,
             logs: "", calcLog: "", calcHistory: [], busWidth: currentMode
@@ -389,14 +408,11 @@ async function simulateExecution(action) {
     }
     if (machineState.instructions.length === 0 || machineState.currentInstructionIndex >= machineState.instructions.length) { stopAutoRun(); return; }
     const line = machineState.instructions[machineState.currentInstructionIndex];
-    const oldState = { ...machineState }; // Clona estado para comparar
+    const oldState = { ...machineState };
     const result = SimulatorCore.runStep(line);
-    
     if (result.error) { document.getElementById('status-message').textContent = `Erro: ${result.error}`; stopAutoRun(); return; }
-    
     highlightChanges(oldState, machineState);
     updateUI();
-    
     const flux = document.getElementById('fluxo-output');
     flux.textContent += `\n\n[${padHexUI(machineState.currentInstructionIndex)}] ${line}\n${machineState.logs}`;
     flux.scrollTop = flux.scrollHeight;
