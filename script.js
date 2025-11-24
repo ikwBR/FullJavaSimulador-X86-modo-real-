@@ -1,4 +1,4 @@
-// script.js (VERSÃO FINAL: CORREÇÃO OPCODE ADD + FORMATO PROFESSOR)
+// script.js (VERSÃO FINAL: FLUXO VISUAL IGUAL AO PROFESSOR + LÓGICA REALISTA)
 
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
@@ -63,7 +63,25 @@ const SimulatorCore = {
         });
     },
 
-    // --- MONTADOR (CORRIGIDO: ADD BX,AX -> 01 C3) ---
+    // --- PILHA ---
+    push: function(value) {
+        let sp = (machineState.SP - 2) & 0xFFFF;
+        machineState.SP = sp;
+        const addr = this.physAddr(machineState.SS, sp);
+        this.writeMem(addr, value & 0xFF, "PUSH Low");
+        this.writeMem(addr + 1, (value >> 8) & 0xFF, "PUSH High");
+        return addr;
+    },
+    pop: function() {
+        const sp = machineState.SP;
+        const addr = this.physAddr(machineState.SS, sp);
+        const low = this.readMem(addr);
+        const high = this.readMem(addr + 1);
+        machineState.SP = (sp + 2) & 0xFFFF;
+        return (high << 8) | low;
+    },
+
+    // --- MONTADOR (ASSEMBLER) ---
     assemble: function(op, dest, src, currentIP) {
         op = op.toUpperCase();
         const regs = ['AX','BX','CX','DX','SI','DI','BP','SP','CS','DS','SS','ES'];
@@ -79,24 +97,16 @@ const SimulatorCore = {
             const val = this.hexToInt(src); return [0xB8, val & 0xFF, val >> 8];
         }
 
-        // 3. ADD BX, AX (2 Bytes) - CORREÇÃO CRÍTICA AQUI
-        // A IA apontou corretamente: 01 C3 é para BX, AX. (01 D8 era AX, BX)
-        if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xC3];
-
-        // 4. MOV [SI], AX (2 Bytes)
+        // 3. CASOS ESPECÍFICOS
+        if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xD8];
         if (op === 'MOV' && dest === '[SI]' && src === 'AX') return [0x89, 0x04];
-
-        // 5. JMP (3 Bytes)
-        if (op === 'JMP') {
-            const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
-            let offset = (target - nextIP) & 0xFFFF; return [0xE9, offset & 0xFF, offset >> 8];
-        }
 
         // --- OUTROS OPCODES ---
         if (op === 'RET') return [0xC3];
         if (op === 'IRET') return [0xCF];
         if (op === 'PUSHF') return [0x9C];
         if (op === 'POPF') return [0x9D];
+
         if (op === 'PUSH' && regs.includes(dest)) return [0x50]; 
         if (op === 'POP' && regs.includes(dest)) return [0x58];
         if (op === 'INC' && regs.includes(dest)) return [0x40];
@@ -111,7 +121,11 @@ const SimulatorCore = {
         if (op === 'NEG') return [0xF7, 0xD8];
         if (op === 'NOT') return [0xF7, 0xD0];
 
-        if (op === 'CALL') {
+        if (op === 'JMP') { // JMP Near (3 Bytes)
+            const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
+            let offset = (target - nextIP) & 0xFFFF; return [0xE9, offset & 0xFF, offset >> 8];
+        }
+        if (op === 'CALL') { 
             const target = this.hexToInt(dest); const nextIP = (currentIP + 3) & 0xFFFF;
             let offset = (target - nextIP) & 0xFFFF; return [0xE8, offset & 0xFF, offset >> 8];
         }
@@ -125,7 +139,7 @@ const SimulatorCore = {
         return [0x89, 0xC0];
     },
 
-    // --- FETCH ---
+    // --- FETCH (COM VISUALIZAÇÃO DIDÁTICA "MOV") ---
     fetch: function(op, dest, src) {
         let log = "; --- CICLO DE BUSCA (FETCH) ---\n";
         const cs = machineState.CS; const ip = machineState.IP;
@@ -147,23 +161,32 @@ const SimulatorCore = {
                 let descL = this.getDesc(op, size, i);
                 this.writeMem(phys, low, descL);
                 
+                // --- LÓGICA VISUAL ---
                 let dataBusStr = "";
-                if (high !== null) {
-                    let descH = this.getDesc(op, size, i+1);
-                    this.writeMem(phys+1, high, descH);
-                    dataBusStr = this.padHex(high, 2) + this.padHex(low, 2);
+                // Se for o PRIMEIRO passo (i==0), mostra o NOME DA INSTRUÇÃO (ex: MOV)
+                if (i === 0) {
+                    dataBusStr = op; 
                 } else {
-                    dataBusStr = this.padHex(low, 2);
+                    // Senão mostra o valor Hex
+                    if (high !== null) dataBusStr = this.padHex(high, 2) + this.padHex(low, 2) + "H";
+                    else dataBusStr = this.padHex(low, 2) + "H";
                 }
+
+                if(high!==null) this.writeMem(phys+1, high, this.getDesc(op, size, i+1));
+                
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${addrHex} (BUS END)\n`;
-                log += `Passo ${machineState.busStep++} (MEM para MP): ${dataBusStr}H (BUS DADOS)\n`;
+                log += `Passo ${machineState.busStep++} (MEM para MP): ${dataBusStr} (BUS DADOS)\n`;
             }
         } else {
             bytes.forEach((b, i) => {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 this.writeMem(phys, b, this.getDesc(op, size, i));
+                
+                // --- LÓGICA VISUAL ---
+                let displayData = (i === 0) ? op : (this.padHex(b, 2) + "H");
+
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
-                log += `Passo ${machineState.busStep++} (MEM para MP): ${this.padHex(b, 2)}H (BUS DADOS)\n`;
+                log += `Passo ${machineState.busStep++} (MEM para MP): ${displayData} (BUS DADOS)\n`;
             });
         }
         machineState.IP = (ip + size) & 0xFFFF;
@@ -209,6 +232,32 @@ const SimulatorCore = {
         else if (machineState[dest] !== undefined) { machineState[dest] = valSrc; log += `; Interno: ${dest}=${this.padHex(valSrc)}H\n`; }
         else if (op === 'ADD') { let r=machineState[dest]+valSrc; machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU: ${dest}=${this.padHex(machineState[dest])}H\n`; }
         else if (op === 'JMP') { machineState.IP = this.hexToInt(dest); log += `; JMP: IP=${this.padHex(machineState.IP)}H\n`; }
+        
+        // Outras ops (Simplificado para visualização)
+        else if (op === 'PUSH') { 
+            const t = machineState[dest]!==undefined?machineState[dest]:this.hexToInt(dest); 
+            this.push(t); log+=`; PUSH ${this.padHex(t)}H\n`; 
+        }
+        else if (op === 'POP') { machineState[dest] = this.pop(); log+=`; POP ${dest}\n`; }
+        else if (['INC','DEC','NOT','NEG'].includes(op)) {
+            let v = machineState[dest];
+            if(op==='INC') v++; else if(op==='DEC') v--; else if(op==='NOT') v=~v; else v=-v;
+            machineState[dest] = v & 0xFFFF; this.updateFlags(v); log+=`; ALU (${op})\n`;
+        }
+        else if (['AND','OR','XOR','SUB','CMP'].includes(op)) {
+            let r=0;
+            if(op==='AND') r=machineState[dest]&valSrc; else if(op==='OR') r=machineState[dest]|valSrc; else if(op==='XOR') r=machineState[dest]^valSrc; else r=machineState[dest]-valSrc;
+            if(op!=='CMP') machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU (${op})\n`;
+        }
+        // Condicionais
+        else if (['JE','JNE','JG','JL','LOOP'].includes(op)) {
+            const f = machineState.FLAGS;
+            const zf=(f>>6)&1; const sf=(f>>7)&1; let j=false;
+            if(op==='JE' && zf) j=true; else if(op==='JNE' && !zf) j=true;
+            if(j) machineState.IP = this.hexToInt(dest);
+            log+=`; ${op} -> ${j?'Salto':'Segue'}\n`;
+        }
+
         return log;
     },
 
@@ -224,6 +273,7 @@ const SimulatorCore = {
     }
 };
 
+// --- UI ---
 function padHexUI(num) { return (num & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
 function highlightChanges(oldState, newState) {
     const keys = ['AX','BX','CX','DX','CS','SS','DS','ES','IP','SP','BP','DI','SI','FLAGS'];
