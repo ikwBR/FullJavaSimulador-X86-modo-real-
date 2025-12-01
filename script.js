@@ -1,4 +1,4 @@
-// script.js (VERSÃO FINAL: DESCRIÇÕES DINÂMICAS NA MEMÓRIA)
+// script.js (VERSÃO FINAL: CORREÇÃO XCHG, 0xAAAA E MOV REG, IMM)
 
 const AUTO_RUN_DELAY = 500; 
 let autoRunInterval = null;
@@ -24,17 +24,27 @@ let machineState = {
 // ============================================================================
 
 const SimulatorCore = {
+    
+    // --- CORREÇÃO 1: SUPORTE A 0x E H ---
     hexToInt: function(val) {
         if (typeof val === 'string') {
-            val = val.toUpperCase().replace(/H/g, '').replace(/\[/g, '').replace(/\]/g, '').trim();
+            // Remove '0X', 'H', '[' e ']' e espaços
+            val = val.toUpperCase()
+                     .replace('0X', '')
+                     .replace(/H/g, '')
+                     .replace(/\[/g, '')
+                     .replace(/\]/g, '')
+                     .trim();
             if (val === '') return 0;
             return parseInt(val, 16) || 0;
         }
         return val & 0xFFFF;
     },
+
     padHex: function(num, len = 4) {
         return (num >>> 0).toString(16).toUpperCase().padStart(len, '0');
     },
+
     physAddr: function(seg, off) { return (seg * 16) + off; },
     
     updateFlags: function(result) {
@@ -68,8 +78,8 @@ const SimulatorCore = {
         let sp = (machineState.SP - 2) & 0xFFFF;
         machineState.SP = sp;
         const addr = this.physAddr(machineState.SS, sp);
-        this.writeMem(addr, value & 0xFF, "Pilha (Byte Baixo)");
-        this.writeMem(addr + 1, (value >> 8) & 0xFF, "Pilha (Byte Alto)");
+        this.writeMem(addr, value & 0xFF, "Pilha Low");
+        this.writeMem(addr + 1, (value >> 8) & 0xFF, "Pilha High");
         return addr;
     },
     pop: function() {
@@ -91,27 +101,37 @@ const SimulatorCore = {
             const d = this.hexToInt(dest); const s = this.hexToInt(src);
             return [0xC7, 0x06, d & 0xFF, d >> 8, s & 0xFF, s >> 8];
         }
-        // 2. MOV AX, IMM (3 Bytes)
-        if (op === 'MOV' && dest === 'AX' && !regs.includes(src) && src !== "") {
-            const val = this.hexToInt(src); return [0xB8, val & 0xFF, val >> 8];
+        
+        // 2. MOV REG, IMM (3 Bytes) - CORREÇÃO CRÍTICA PARA BX, CX, ETC.
+        if (op === 'MOV' && regs.includes(dest) && !regs.includes(src) && src !== "") {
+            const val = this.hexToInt(src);
+            // Tabela de Opcodes Base para MOV reg, imm16 (0xB8 + reg)
+            const mapMovImm = {
+                'AX': 0xB8, 'CX': 0xB9, 'DX': 0xBA, 'BX': 0xBB,
+                'SP': 0xBC, 'BP': 0xBD, 'SI': 0xBE, 'DI': 0xBF
+            };
+            const opcode = mapMovImm[dest] || 0xB8; // Fallback para B8
+            return [opcode, val & 0xFF, val >> 8];
         }
+
         // 3. CASOS ESPECÍFICOS
-        if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xD8];
+        if (op === 'ADD' && dest === 'BX' && src === 'AX') return [0x01, 0xC3]; // 01 C3 para ADD BX,AX
         if (op === 'MOV' && dest === '[SI]' && src === 'AX') return [0x89, 0x04];
 
         // --- OUTROS ---
         if (op === 'RET') return [0xC3];
         if (op === 'IRET') return [0xCF];
-        if (op === 'PUSHF') return [0x9C];
-        if (op === 'POPF') return [0x9D];
-
+        
+        // Instruções com Registradores
         if (op === 'PUSH' && regs.includes(dest)) return [0x50]; 
         if (op === 'POP' && regs.includes(dest)) return [0x58];
         if (op === 'INC' && regs.includes(dest)) return [0x40];
         if (op === 'DEC' && regs.includes(dest)) return [0x48];
-        if (op === 'XCHG') return [0x87, 0xC0];
+        
+        // XCHG (Exchange)
+        if (op === 'XCHG') return [0x87, 0xC0]; // Genérico (Ex: XCHG AX, BX = 93H, mas 87 C3 funciona geral)
 
-        const binaryOps = {'ADD':0x01, 'OR':0x09, 'ADC':0x11, 'SBB':0x19, 'AND':0x21, 'SUB':0x29, 'XOR':0x31, 'CMP':0x39, 'TEST':0x85};
+        const binaryOps = {'ADD':0x01, 'OR':0x09, 'AND':0x21, 'SUB':0x29, 'XOR':0x31, 'CMP':0x39};
         if (binaryOps[op]) return [binaryOps[op], 0xC0];
 
         if (op === 'MUL') return [0xF7, 0xE0];
@@ -134,43 +154,7 @@ const SimulatorCore = {
         if (op === 'IN') return [0xE4, 0x00];
         if (op === 'OUT') return [0xE6, 0x00];
 
-        return [0x89, 0xC0];
-    },
-
-    // --- DESCRIÇÕES INTELIGENTES ---
-    getDesc: function(op, dest, src, size, i) {
-        op = op.toUpperCase();
-        
-        // MOV MEM, IMM
-        if (op === 'MOV' && size === 6) {
-            return [
-                `Opcode (MOV Mem, Imm)`, 
-                `ModRM (Endereço Direto)`, 
-                `Disp Low (${dest})`, `Disp High (${dest})`, 
-                `Dado Low (${src})`, `Dado High (${src})`
-            ][i];
-        }
-        
-        // MOV AX, IMM
-        if (op === 'MOV' && dest === 'AX' && size === 3) {
-            return [`Opcode (MOV AX, Imm)`, `Dado Low (${src})`, `Dado High (${src})`][i];
-        }
-
-        // Instruções de 2 Bytes (ADD, MOV Reg, etc)
-        if (size === 2) {
-            if (i === 0) return `Opcode (${op})`;
-            // ModRM Dinâmico: Mostra quem são os operandos
-            return `ModRM (Dest:${dest}, Src:${src})`;
-        }
-
-        // JMP / CALL
-        if ((op === 'JMP' || op === 'CALL') && size === 3) {
-            return [`Opcode (${op})`, `Offset Low`, `Offset High`][i];
-        }
-
-        // Fallback
-        if (i === 0) return `Opcode (${op} ${dest})`;
-        return "Operando / Byte";
+        return [0x90, 0x90]; // NOP se não reconhecer
     },
 
     // --- FETCH ---
@@ -213,7 +197,6 @@ const SimulatorCore = {
                 const phys = this.physAddr(cs, (ip + i) & 0xFFFF);
                 let desc = this.getDesc(op, dest, src, size, i);
                 this.writeMem(phys, b, desc);
-                
                 let label = (i === 0) ? op : `${this.padHex(b, 2)}H`;
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MEM para MP): ${label} (BUS DADOS)\n`;
@@ -224,12 +207,24 @@ const SimulatorCore = {
         return log;
     },
 
+    getDesc: function(op, dest, src, size, i) {
+        op = op.toUpperCase();
+        if (op === 'MOV' && size === 6) return ["Opcode", "ModRM", "Disp L", "Disp H", "Imm L", "Imm H"][i];
+        if (op === 'MOV' && size === 3) return ["Opcode", "Imm L", "Imm H"][i];
+        if (op === 'ADD' && size === 2) return ["Opcode", "ModRM"][i];
+        if (op === 'JMP' || op === 'CALL') return ["Opcode", "Offset L", "Offset H"][i];
+        if (i===0) return `Opcode (${op})`;
+        return "Byte";
+    },
+
     // --- EXECUTE ---
     execute: function(op, dest, src) {
         let log = `; --- CICLO DE EXECUÇÃO (${op}) ---\n`;
         op = op.toUpperCase();
         let valSrc = machineState[src] !== undefined ? machineState[src] : (src ? this.hexToInt(src) : 0);
+        let valDest = machineState[dest] !== undefined ? machineState[dest] : this.hexToInt(dest);
 
+        // MOV MEM
         if (op === 'MOV' && dest.startsWith('[')) {
             const ds = machineState.DS;
             let off = this.hexToInt(dest);
@@ -242,11 +237,6 @@ const SimulatorCore = {
             machineState.calcLog += `\n\nCÁLCULO (DADOS):\nE.F. = (${dsHex}H * 10H) + ${offHex}H\nE.F. = ${dsHex}0H + ${offHex}H = ${this.padHex(phys, 5)}H`;
 
             const low = valSrc & 0xFF; const high = (valSrc >> 8) & 0xFF;
-            
-            // Descrições de Escrita
-            const descL = `Escrita ${src} (Byte Baixo)`;
-            const descH = `Escrita ${src} (Byte Alto)`;
-
             if (machineState.busWidth === 16) {
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\n`;
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(valSrc, 4)}H (BUS DADOS)\n`;
@@ -254,12 +244,29 @@ const SimulatorCore = {
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys, 5)} (BUS END)\nPasso ${machineState.busStep++} (MP para MEM): ${this.padHex(low, 2)}H (BUS DADOS)\n`;
                 log += `Passo ${machineState.busStep++} (MP para MEM): ${this.padHex(phys+1, 5)} (BUS END)\nPasso ${machineState.busStep++} (MP para MEM): ${this.padHex(high, 2)}H (BUS DADOS)\n`;
             }
-            this.writeMem(phys, low, descL); this.writeMem(phys+1, high, descH);
+            this.writeMem(phys, low, "Escrita L"); this.writeMem(phys+1, high, "Escrita H");
         } 
-        else if (machineState[dest] !== undefined) { machineState[dest] = valSrc; log += `; Interno: ${dest}=${this.padHex(valSrc)}H\n`; }
-        else if (op === 'ADD') { let r=machineState[dest]+valSrc; machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU: ${dest}=${this.padHex(machineState[dest])}H\n`; }
+        
+        // MOV REG (Interno)
+        else if (op === 'MOV' && machineState[dest] !== undefined) { 
+            machineState[dest] = valSrc; 
+            log += `; Interno: ${dest}=${this.padHex(valSrc)}H\n`; 
+        }
+        
+        // XCHG (CORREÇÃO CRÍTICA: SWAP REAL)
+        else if (op === 'XCHG' && machineState[dest] !== undefined && machineState[src] !== undefined) {
+            const temp = machineState[dest];
+            machineState[dest] = machineState[src];
+            machineState[src] = temp;
+            log += `; Interno: Troca ${dest}=${this.padHex(machineState[dest])}H <-> ${src}=${this.padHex(machineState[src])}H\n`;
+        }
+
+        // ARITMÉTICA
+        else if (op === 'ADD') { let r=valDest+valSrc; machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU: ${dest}=${this.padHex(machineState[dest])}H\n`; }
+        else if (op === 'SUB') { let r=valDest-valSrc; machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU: ${dest}=${this.padHex(machineState[dest])}H\n`; }
         else if (op === 'JMP') { machineState.IP = this.hexToInt(dest); log += `; JMP: IP=${this.padHex(machineState.IP)}H\n`; }
         
+        // OUTROS
         else if (op === 'PUSH') { 
             const t = machineState[dest]!==undefined?machineState[dest]:this.hexToInt(dest); 
             const addr = this.push(t); 
@@ -267,17 +274,20 @@ const SimulatorCore = {
             this.addHistory("Pilha", machineState.SS, machineState.SP, addr);
         }
         else if (op === 'POP') { machineState[dest] = this.pop(); log+=`; POP ${dest}\n`; }
-        
         else if (['INC','DEC','NOT','NEG'].includes(op)) {
             let v = machineState[dest];
             if(op==='INC') v++; else if(op==='DEC') v--; else if(op==='NOT') v=~v; else v=-v;
             machineState[dest] = v & 0xFFFF; this.updateFlags(v); log+=`; ALU (${op})\n`;
         }
-        else if (['AND','OR','XOR','SUB','CMP'].includes(op)) {
+        else if (['AND','OR','XOR'].includes(op)) {
             let r=0;
-            if(op==='AND') r=machineState[dest]&valSrc; else if(op==='OR') r=machineState[dest]|valSrc; else if(op==='XOR') r=machineState[dest]^valSrc; else r=machineState[dest]-valSrc;
-            if(op!=='CMP') machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU (${op})\n`;
+            if(op==='AND') r=valDest&valSrc; else if(op==='OR') r=valDest|valSrc; else if(op==='XOR') r=valDest^valSrc;
+            machineState[dest]=r&0xFFFF; this.updateFlags(r); log+=`; ALU (${op})\n`;
         }
+        else if (op==='CMP') {
+            let r=valDest-valSrc; this.updateFlags(r); log+=`; CMP ${dest}, ${src} (Flags updated)\n`;
+        }
+        // Condicionais
         else if (['JE','JNE','JG','JL','LOOP'].includes(op)) {
             const f = machineState.FLAGS;
             const zf=(f>>6)&1; const sf=(f>>7)&1; let j=false;
@@ -305,34 +315,15 @@ const SimulatorCore = {
 
 // --- UI ---
 function padHexUI(num) { return (num & 0xFFFF).toString(16).toUpperCase().padStart(4, '0'); }
-
 function highlightChanges(oldState, newState) {
     const keys = ['AX','BX','CX','DX','CS','SS','DS','ES','IP','SP','BP','DI','SI','FLAGS'];
-    keys.forEach(key => {
-        if (oldState[key] !== newState[key]) {
-            const id = key === 'FLAGS' ? 'reg-flag-value' : `reg-${key.toLowerCase()}`;
-            const td = document.getElementById(id);
-            if(td) {
-                const input = td.querySelector('input');
-                if(input) {
-                    input.classList.remove('blink');
-                    void input.offsetWidth; 
-                    input.classList.add('blink');
-                }
-            }
-        }
-    });
+    keys.forEach(key => { if (oldState[key] !== newState[key]) { const el = document.getElementById(key==='FLAGS'?'reg-flag-value':`reg-${key.toLowerCase()}`); if(el){ el.classList.remove('blink'); void el.offsetWidth; el.classList.add('blink'); } } });
 }
-
 function manualUpdate(reg, valueStr) {
     const val = SimulatorCore.hexToInt(valueStr);
-    if (reg === 'FLAGS') machineState.FLAGS = val;
-    else machineState[reg] = val;
+    if (reg === 'FLAGS') machineState.FLAGS = val; else machineState[reg] = val;
     updateUI();
-    const status = document.getElementById('status-message');
-    if(status) status.textContent = `${reg} alterado manualmente.`;
 }
-
 function updateUI() {
     const regs = ['AX','BX','CX','DX','CS','SS','DS','ES','IP','SP','BP','DI','SI','FLAGS'];
     regs.forEach(r => {
@@ -341,36 +332,24 @@ function updateUI() {
         if (!cell) return;
         let input = cell.querySelector('input');
         if (!input) {
-            cell.innerHTML = '';
-            input = document.createElement('input');
-            input.className = 'reg-input';
-            input.type = 'text';
-            input.maxLength = 4;
+            cell.innerHTML = ''; input = document.createElement('input');
+            input.className = 'reg-input'; input.type = 'text'; input.maxLength = 4;
             input.onchange = (e) => manualUpdate(r, e.target.value);
             cell.appendChild(input);
-            const suffix = document.createElement('span');
-            suffix.className = 'hex-suffix';
-            suffix.innerText = 'H';
-            cell.appendChild(suffix);
+            const suffix = document.createElement('span'); suffix.className = 'hex-suffix'; suffix.innerText = 'H'; cell.appendChild(suffix);
         }
-        if (document.activeElement !== input) {
-            input.value = padHexUI(machineState[r]);
-        }
+        if (document.activeElement !== input) input.value = padHexUI(machineState[r]);
     });
-
     const memDiv = document.getElementById('memory-view');
     const sortedAddr = Object.keys(machineState.memory).sort((a,b) => parseInt(a,16) - parseInt(b,16));
     let htmlMem = `<table class="memory-table"><thead><tr><th>Endereço</th><th>Valor</th><th>Significado</th></tr></thead><tbody>`;
     sortedAddr.forEach(addr => { const m = machineState.memory[addr]; htmlMem += `<tr><td><b>${addr}H</b></td><td class="mem-val">${SimulatorCore.padHex(m.val, 2)}H</td><td class="mem-desc">${m.desc}</td></tr>`; });
     htmlMem += `</tbody></table>`;
     memDiv.innerHTML = htmlMem;
-
     const histDiv = document.getElementById('calc-history-view');
     if (histDiv) {
         let htmlHist = `<table class="memory-table"><thead><tr><th>Tipo</th><th>Seg:Off</th><th>Cálculo</th><th>Físico</th></tr></thead><tbody>`;
-        machineState.calcHistory.forEach(h => {
-            htmlHist += `<tr><td style="color:#79c0ff">${h.type}</td><td>${h.segOff}</td><td style="font-size:0.85em">${h.calc}</td><td class="mem-val">${h.res}H</td></tr>`;
-        });
+        machineState.calcHistory.forEach(h => { htmlHist += `<tr><td style="color:#79c0ff">${h.type}</td><td>${h.segOff}</td><td style="font-size:0.85em">${h.calc}</td><td class="mem-val">${h.res}H</td></tr>`; });
         htmlHist += `</tbody></table>`;
         histDiv.innerHTML = htmlHist;
         histDiv.scrollTop = histDiv.scrollHeight;
@@ -378,7 +357,6 @@ function updateUI() {
     const calcMidDiv = document.getElementById('address-calculation-output');
     if (calcMidDiv) calcMidDiv.innerText = machineState.calcLog;
 }
-
 function loadCode() {
     const raw = document.getElementById('assembly-code').value;
     machineState.instructions = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith(';'));
@@ -387,7 +365,6 @@ function loadCode() {
     document.getElementById('status-message').textContent = `Carregado.`;
     return true;
 }
-
 async function simulateExecution(action) {
     if (action === 'init') { stopAutoRun(); simulateExecution('reset'); if(loadCode()) updateUI(); return; }
     if (action === 'reset') {
@@ -423,7 +400,6 @@ async function simulateExecution(action) {
         stopAutoRun();
     }
 }
-
 function toggleAutoRun() {
     if (autoRunInterval) stopAutoRun();
     else {
@@ -433,12 +409,10 @@ function toggleAutoRun() {
         autoRunInterval = setInterval(() => simulateExecution('step'), AUTO_RUN_DELAY);
     }
 }
-
 function stopAutoRun() {
     if (autoRunInterval) { clearInterval(autoRunInterval); autoRunInterval = null; }
     const btn = document.getElementById('btn-autorun');
     if (btn) { btn.textContent = "Executar Tudo"; btn.style.backgroundColor = ""; }
 }
-
 function changeBusMode() { document.getElementById('status-message').textContent = "Modo alterado. Resete para aplicar."; }
 document.addEventListener('DOMContentLoaded', updateUI);
